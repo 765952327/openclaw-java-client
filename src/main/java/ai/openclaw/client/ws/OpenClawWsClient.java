@@ -11,14 +11,27 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class OpenClawWsClient {
 
     private static final Logger logger = LoggerFactory.getLogger(OpenClawWsClient.class);
+
+    private static final long DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+    private static final long DEFAULT_RESULT_TIMEOUT_MS = 300000;
+    private static final int DEFAULT_MAX_QUEUE_CAPACITY = 500;
 
     private final String baseUrl;
     private final String token;
@@ -28,7 +41,6 @@ public class OpenClawWsClient {
     private OkHttpClient httpClient;
     private volatile boolean connected = false;
     private volatile boolean connecting = false;
-    private volatile boolean closed = false;
     
     private final Map<String, WsResponse> pendingRequests = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<WsEventListener> eventListeners = new CopyOnWriteArrayList<>();
@@ -37,12 +49,34 @@ public class OpenClawWsClient {
     private int protocolVersion;
     private String deviceToken;
     private boolean requireDevice = true;
+    
+    private final int maxQueueCapacity;
+    private final long defaultRequestTimeoutMs;
+    private final long defaultResultTimeoutMs;
+    private final BlockingQueue<PendingRequest> requestQueue;
+    private final ExecutorService consumerExecutor;
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public OpenClawWsClient(String baseUrl, String token) {
+        this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS);
+    }
+
+    public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
+            long defaultRequestTimeoutMs, long defaultResultTimeoutMs) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
         this.objectMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        this.maxQueueCapacity = maxQueueCapacity;
+        this.defaultRequestTimeoutMs = defaultRequestTimeoutMs;
+        this.defaultResultTimeoutMs = defaultResultTimeoutMs;
+        
+        this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
+        this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "openclaw-ws-consumer");
+            t.setDaemon(true);
+            return t;
+        });
         
         this.httpClient = new OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -112,7 +146,118 @@ public class OpenClawWsClient {
         }
 
         logger.info("Connect completed, connected: {}", connected);
+        
+        if (connected) {
+            startConsumer();
+        }
+        
         return connected;
+    }
+
+    private void startConsumer() {
+        if (running.compareAndSet(false, true)) {
+            consumerExecutor.submit(this::consumerLoop);
+            logger.info("Request consumer started");
+        }
+    }
+
+    private void consumerLoop() {
+        logger.info("Consumer loop started");
+        
+        while (running.get()) {
+            try {
+                PendingRequest request = requestQueue.poll(1, TimeUnit.SECONDS);
+                
+                if (request == null) {
+                    continue;
+                }
+                
+                if (!connected) {
+                    request.getFuture().completeExceptionally(
+                        new IOException("WebSocket not connected")
+                    );
+                    continue;
+                }
+                
+                processRequest(request);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                logger.error("Consumer loop error: {}", e.getMessage());
+            }
+        }
+        
+        logger.info("Consumer loop stopped");
+    }
+
+    private void processRequest(PendingRequest request) {
+        try {
+            Map<String, Object> params = new HashMap<>();
+            String idempotencyKey = UUID.randomUUID().toString();
+            params.put("idempotencyKey", idempotencyKey);
+            params.put("message", request.getMessage());
+            
+            if (request.getSessionKey() != null && !request.getSessionKey().isEmpty()) {
+                params.put("sessionKey", request.getSessionKey());
+            }
+            if (request.getDeliver() != null) {
+                params.put("deliver", request.getDeliver());
+            }
+            
+            WsRequest wsRequest = new WsRequest();
+            wsRequest.setId(request.getId());
+            wsRequest.setMethod("agent");
+            wsRequest.setParams(params);
+            
+            sendRequest(wsRequest);
+            
+            WsResponse response = waitForResponse(request.getId(), request.getRequestTimeoutMs());
+            
+            if (!Boolean.TRUE.equals(response.getOk())) {
+                request.getFuture().completeExceptionally(
+                    new IOException("Agent request failed: " + response.getErrorMessage())
+                );
+                return;
+            }
+            
+            String runId = (String) response.getPayloadValue("runId");
+            String status = (String) response.getPayloadValue("status");
+            
+            if (runId != null) {
+                request.setRunId(runId);
+            }
+            
+            if ("accepted".equals(status)) {
+                AgentResult result = waitForAgentResult(runId, request.getResultTimeoutMs());
+                request.getFuture().complete(result);
+            } else if ("ok".equals(status)) {
+                AgentResult result = new AgentResult();
+                result.setRunId(runId);
+                result.setStatus(status);
+                
+                Map<String, Object> payload = response.getPayload();
+                Map<String, Object> resultObj = (Map<String, Object>) payload.get("result");
+                if (resultObj != null) {
+                    List<Map<String, Object>> payloads = (List<Map<String, Object>>) resultObj.get("payloads");
+                    if (payloads != null && !payloads.isEmpty()) {
+                        String text = (String) payloads.get(0).get("text");
+                        result.setSummary(text);
+                    }
+                }
+                request.getFuture().complete(result);
+            } else {
+                request.getFuture().completeExceptionally(
+                    new IOException("Unknown status: " + status)
+                );
+            }
+            
+        } catch (TimeoutException e) {
+            request.getFuture().completeExceptionally(e);
+        } catch (Exception e) {
+            request.getFuture().completeExceptionally(e);
+        }
     }
 
     private void sendConnect() {
@@ -136,7 +281,7 @@ public class OpenClawWsClient {
     private void handleMessage(String text) {
         try {
             WsResponse response = objectMapper.readValue(text, WsResponse.class);
-            logger.info("Received message: {}", text);
+            logger.debug("Received message: {}", text);
             
             if (response.isResponse()) {
                 String id = response.getId();
@@ -238,6 +383,146 @@ public class OpenClawWsClient {
         }
     }
 
+    private WsResponse waitForResponse(String requestId, long timeoutMs) throws TimeoutException, IOException {
+        if (timeoutMs <= 0) {
+            timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
+        }
+        
+        long start = System.currentTimeMillis();
+        
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            WsResponse response = pendingRequests.remove(requestId);
+            if (response != null) {
+                return response;
+            }
+            
+            if (!connected) {
+                throw new IOException("WebSocket disconnected");
+            }
+            
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        
+        throw new TimeoutException("Request timeout: " + requestId);
+    }
+
+    private AgentResult waitForAgentResult(String runId, long timeoutMs) throws TimeoutException, IOException {
+        if (timeoutMs <= 0) {
+            timeoutMs = DEFAULT_RESULT_TIMEOUT_MS;
+        }
+        
+        long start = System.currentTimeMillis();
+        
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            WsResponse eventResponse = pendingRequests.remove("agent:" + runId);
+            if (eventResponse != null) {
+                Map<String, Object> payload = eventResponse.getPayload();
+                if (payload != null) {
+                    String stream = (String) payload.get("stream");
+                    Map<String, Object> data = (Map<String, Object>) payload.get("data");
+                    
+                    if ("lifecycle".equals(stream) && data != null) {
+                        String phase = (String) data.get("phase");
+                        logger.info("Agent lifecycle event: phase={}", phase);
+                        
+                        if ("complete".equals(phase)) {
+                            AgentResult result = new AgentResult();
+                            result.setRunId(runId);
+                            result.setStatus("ok");
+                            result.setSummary((String) data.get("summary"));
+                            
+                            logger.info("Agent completed with status: {}, summary: {}", result.getStatus(), result.getSummary());
+                            return result;
+                        } else if ("end".equals(phase)) {
+                            logger.info("Agent ended, waiting for final response...");
+                        } else if ("error".equals(phase)) {
+                            AgentResult result = new AgentResult();
+                            result.setRunId(runId);
+                            result.setStatus("error");
+                            result.setError((String) data.get("error"));
+                            
+                            logger.info("Agent error: {}", result.getError());
+                            return result;
+                        }
+                    }
+                }
+            }
+            
+            WsResponse chatResponse = pendingRequests.remove("chat:" + runId);
+            if (chatResponse != null) {
+                Map<String, Object> payload = chatResponse.getPayload();
+                if (payload != null) {
+                    String state = (String) payload.get("state");
+                    logger.info("Chat event received: state={}", state);
+                    
+                    if ("final".equals(state)) {
+                        Map<String, Object> message = (Map<String, Object>) payload.get("message");
+                        if (message != null) {
+                            String summary = extractTextFromMessage(message);
+                            if (summary != null) {
+                                AgentResult result = new AgentResult();
+                                result.setRunId(runId);
+                                result.setStatus("ok");
+                                result.setSummary(summary);
+                                
+                                logger.info("Agent completed via chat event, summary: {}", summary);
+                                return result;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!connected) {
+                throw new IOException("WebSocket disconnected");
+            }
+            
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        
+        AgentResult timeoutResult = new AgentResult();
+        timeoutResult.setRunId(runId);
+        timeoutResult.setStatus("timeout");
+        timeoutResult.setError("Wait for result timeout after " + timeoutMs + "ms");
+        return timeoutResult;
+    }
+    
+    private String extractTextFromMessage(Map<String, Object> message) {
+        if (message == null) {
+            return null;
+        }
+        
+        Object contentObj = message.get("content");
+        if (contentObj instanceof List) {
+            List<?> contentList = (List<?>) contentObj;
+            for (Object item : contentList) {
+                if (item instanceof Map) {
+                    Map<?, ?> contentItem = (Map<?, ?>) item;
+                    if ("text".equals(contentItem.get("type"))) {
+                        return (String) contentItem.get("text");
+                    }
+                }
+            }
+        }
+        
+        String directText = (String) message.get("content");
+        if (directText != null) {
+            return directText;
+        }
+        
+        return null;
+    }
+
     public WsResponse sendAndWait(String method, Map<String, Object> params, long timeoutMs) throws IOException {
         String id = java.util.UUID.randomUUID().toString();
         
@@ -274,206 +559,100 @@ public class OpenClawWsClient {
     }
 
     public AgentResult runAgent(String message) throws IOException {
-        return runAgent(message, null, null, 120000);
+        try {
+            return runAgentAsync(message, null, null, null).get(defaultResultTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            throw new IOException(e.getCause());
+        } catch (TimeoutException e) {
+            throw new IOException("Agent execution timeout", e);
+        }
     }
 
     public AgentResult runAgent(String message, String agentId) throws IOException {
-        return runAgent(message, agentId, null, 120000);
+        try {
+            return runAgentAsync(message, agentId, null, null).get(defaultResultTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            throw new IOException(e.getCause());
+        } catch (TimeoutException e) {
+            throw new IOException("Agent execution timeout", e);
+        }
     }
 
     public AgentResult runAgent(String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
-        Map<String, Object> params = new HashMap<>();
-        String idempotencyKey = UUID.randomUUID().toString();
-        params.put("idempotencyKey", idempotencyKey);
-        params.put("message", message);
+        long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
+        try {
+            return runAgentAsync(message, agentId, null, timeoutMs).get(effectiveTimeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            throw new IOException(e.getCause());
+        } catch (TimeoutException e) {
+            throw new IOException("Agent execution timeout", e);
+        }
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, 
+            Long requestTimeoutMs, Long resultTimeoutMs) {
+        
+        if (requestQueue.size() >= maxQueueCapacity) {
+            return CompletableFuture.failedFuture(
+                new RejectedExecutionException("Request queue is full (" + maxQueueCapacity + "), please try again later")
+            );
+        }
+        
+        CompletableFuture<AgentResult> future = new CompletableFuture<>();
+        
+        String sessionKey = null;
         if (agentId != null && !agentId.isEmpty()) {
-            params.put("sessionKey", "agent:main:" + agentId);
-        }
-        if (deliver != null) {
-            params.put("deliver", deliver);
+            sessionKey = "agent:main:" + agentId;
         }
         
-        String requestId = UUID.randomUUID().toString();
-        WsRequest request = new WsRequest();
-        request.setId(requestId);
-        request.setMethod("agent");
-        request.setParams(params);
+        PendingRequest request = new PendingRequest(
+            message,
+            agentId,
+            null,
+            sessionKey,
+            requestTimeoutMs != null ? requestTimeoutMs : defaultRequestTimeoutMs,
+            resultTimeoutMs != null ? resultTimeoutMs : defaultResultTimeoutMs,
+            future
+        );
         
-        sendRequest(request);
-        
-        WsResponse response = waitForAgentResponse(requestId, timeoutMs);
-        
-        if (!Boolean.TRUE.equals(response.getOk())) {
-            String error = response.getErrorMessage();
-            throw new IOException("Agent request failed: " + error);
+        boolean offered = requestQueue.offer(request);
+        if (!offered) {
+            future.completeExceptionally(
+                new RejectedExecutionException("Failed to add request to queue")
+            );
         }
         
-        String runId = (String) response.getPayloadValue("runId");
-        String status = (String) response.getPayloadValue("status");
-        
-        AgentResult result = new AgentResult();
-        result.setRunId(runId);
-        result.setStatus(status);
-        
-        if ("accepted".equals(status)) {
-            return waitForAgentResult(runId, timeoutMs);
-        }
-        
-        if ("ok".equals(status)) {
-            Map<String, Object> payload = response.getPayload();
-            Map<String, Object> resultObj = (Map<String, Object>) payload.get("result");
-            if (resultObj != null) {
-                List<Map<String, Object>> payloads = (List<Map<String, Object>>) resultObj.get("payloads");
-                if (payloads != null && !payloads.isEmpty()) {
-                    String text = (String) payloads.get(0).get("text");
-                    result.setSummary(text);
-                }
-            }
-        }
-        
-        return result;
+        return future;
     }
 
-    private WsResponse waitForAgentResponse(String requestId, long timeoutMs) throws IOException {
-        long start = System.currentTimeMillis();
-        
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            WsResponse response = pendingRequests.remove(requestId);
-            if (response != null) {
-                return response;
-            }
-            
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        
-        throw new IOException("Request timeout: agent");
+    public int getQueueSize() {
+        return requestQueue.size();
     }
 
-    private AgentResult waitForAgentResult(String runId, long timeoutMs) throws IOException {
-        long start = System.currentTimeMillis();
-        
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            WsResponse eventResponse = pendingRequests.remove("agent:" + runId);
-            if (eventResponse != null) {
-                Map<String, Object> payload = eventResponse.getPayload();
-                if (payload != null) {
-                    String stream = (String) payload.get("stream");
-                    Map<String, Object> data = (Map<String, Object>) payload.get("data");
-                    
-                    if ("lifecycle".equals(stream) && data != null) {
-                        String phase = (String) data.get("phase");
-                        logger.info("Agent lifecycle event: phase={}", phase);
-                        
-                        if ("complete".equals(phase)) {
-                            AgentResult result = new AgentResult();
-                            result.setRunId(runId);
-                            result.setStatus("ok");
-                            result.setSummary((String) data.get("summary"));
-                            
-                            logger.info("Agent completed with status: {}, summary: {}", result.getStatus(), result.getSummary());
-                            return result;
-                        } else if ("end".equals(phase)) {
-                            logger.info("Agent ended, waiting for final response...");
-                        } else if ("error".equals(phase)) {
-                            AgentResult result = new AgentResult();
-                            result.setRunId(runId);
-                            result.setStatus("error");
-                            result.setError((String) data.get("error"));
-                            
-                            logger.info("Agent error: {}", result.getError());
-                            return result;
-                        }
-                    }
-                    
-                    if (eventResponse.isResponse() && payload.containsKey("status")) {
-                        String status = (String) payload.get("status");
-                        logger.info("Agent final response status: {}", status);
-                        
-                        AgentResult result = new AgentResult();
-                        result.setRunId(runId);
-                        result.setStatus(status);
-                        
-                        if ("ok".equals(status)) {
-                            Map<String, Object> resultObj = (Map<String, Object>) payload.get("result");
-                            if (resultObj != null) {
-                                List<Map<String, Object>> payloads = (List<Map<String, Object>>) resultObj.get("payloads");
-                                if (payloads != null && !payloads.isEmpty()) {
-                                    String text = (String) payloads.get(0).get("text");
-                                    result.setSummary(text);
-                                }
-                            }
-                        } else if ("error".equals(status)) {
-                            result.setError((String) payload.get("error"));
-                        }
-                        
-                        logger.info("Agent completed with status: {}, summary: {}", result.getStatus(), result.getSummary());
-                        return result;
-                    }
-                }
-            }
-            
-            WsResponse chatResponse = pendingRequests.remove("chat:" + runId);
-            if (chatResponse != null) {
-                Map<String, Object> payload = chatResponse.getPayload();
-                if (payload != null) {
-                    String state = (String) payload.get("state");
-                    logger.info("Chat event received: state={}", state);
-                    
-                    if ("final".equals(state)) {
-                        Map<String, Object> message = (Map<String, Object>) payload.get("message");
-                        if (message != null) {
-                            String summary = extractTextFromMessage(message);
-                            if (summary != null) {
-                                AgentResult result = new AgentResult();
-                                result.setRunId(runId);
-                                result.setStatus("ok");
-                                result.setSummary(summary);
-                                
-                                logger.info("Agent completed via chat event, summary: \n {}", summary);
-                                return result;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        AgentResult timeoutResult = new AgentResult();
-        timeoutResult.setRunId(runId);
-        timeoutResult.setStatus("timeout");
-        timeoutResult.setError("Wait for result timeout");
-        return timeoutResult;
+    public boolean isQueueFull() {
+        return requestQueue.size() >= maxQueueCapacity;
     }
-    
-    private String extractTextFromMessage(Map<String, Object> message) {
-        if (message == null) {
-            return null;
-        }
-        
-        Object contentObj = message.get("content");
-        if (contentObj instanceof List) {
-            List<?> contentList = (List<?>) contentObj;
-            for (Object item : contentList) {
-                if (item instanceof Map) {
-                    Map<?, ?> contentItem = (Map<?, ?>) item;
-                    if ("text".equals(contentItem.get("type"))) {
-                        return (String) contentItem.get("text");
-                    }
-                }
-            }
-        }
-        
-        String directText = (String) message.get("content");
-        if (directText != null) {
-            return directText;
-        }
-        
-        return null;
+
+    public int getMaxQueueCapacity() {
+        return maxQueueCapacity;
     }
 
     public WsResponse sendMessage(String target, String message) throws IOException {
@@ -495,11 +674,31 @@ public class OpenClawWsClient {
     }
 
     public void close() {
+        running.set(false);
+        
+        requestQueue.clear();
+        
         if (webSocket != null) {
-            webSocket.close(1000, "Client closed");
+            try {
+                webSocket.close(1000, "Client closed");
+            } catch (Exception e) {
+                logger.warn("Error closing WebSocket: {}", e.getMessage());
+            }
         }
+        
         connected = false;
-        logger.info("WebSocket closed");
+        
+        consumerExecutor.shutdown();
+        try {
+            if (!consumerExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                consumerExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            consumerExecutor.shutdownNow();
+        }
+        
+        logger.info("WebSocket client closed");
     }
 
     public boolean isConnected() {
