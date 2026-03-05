@@ -1,14 +1,32 @@
 # OpenClaw Java Client
 
-Java客户端包，用于通过Webhook调用OpenClaw自动化平台。
+Java客户端包，用于通过Webhook和WebSocket调用OpenClaw自动化平台。
+
+[![Java Version](https://img.shields.io/badge/Java-17%2B-blue)](https://www.java.com/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ## 功能特性
 
-- 支持Wake端点触发心跳
-- 支持Agent端点运行智能体
-- 支持定时任务配置
-- 支持YAML配置文件
-- 兼容Spring Boot
+### 核心功能
+- **Webhook 调用** - 通过HTTP调用OpenClaw自动化平台
+- **WebSocket 实时通信** - 双向实时连接，支持事件监听
+- **定时任务** - 支持Cron表达式配置定时任务
+- **多实例管理** - 支持连接多个OpenClaw网关实例
+- **批处理请求** - 支持串行和并行请求
+
+### 通信方式
+
+| 方式 | 协议 | 适用场景 |
+|------|------|---------|
+| Webhook | HTTP | 简单请求、触发自动化 |
+| WebSocket | WS | 实时交互、长时间运行、事件监听 |
+
+### WebSocket 特性
+- 双向实时通信
+- 支持 `agent` 和 `chat` 事件监听
+- 会话管理 (`sessionKey`)
+- 同步/异步 agent 执行
+- 心跳保活
 
 ## 快速开始
 
@@ -22,7 +40,7 @@ Java客户端包，用于通过Webhook调用OpenClaw自动化平台。
 </dependency>
 ```
 
-### 基本用法
+### 基本用法 (Webhook)
 
 ```java
 // 创建客户端
@@ -41,7 +59,57 @@ client.runAgent("Summarize my inbox", "EmailAgent");
 client.close();
 ```
 
-### 使用配置
+### WebSocket 用法
+
+```java
+// 创建WebSocket客户端
+OpenClawWsClient wsClient = new OpenClawWsClient(
+    "http://127.0.0.1:18789",  // Gateway地址
+    "ollama"                     // Gateway令牌
+);
+
+// 跳过设备认证（开发环境）
+wsClient.setRequireDevice(false);
+
+// 连接
+boolean connected = wsClient.connect();
+if (connected) {
+    System.out.println("Connected to OpenClaw Gateway");
+    
+    // 同步执行Agent
+    AgentResult result = wsClient.runAgent("What is 1+1?", "main");
+    System.out.println("Result: " + result.getSummary());
+    
+    // 添加事件监听器
+    wsClient.addEventListener(new WsEventListener() {
+        @Override
+        public void onAgentEvent(String runId, String status, Map<String, Object> payload) {
+            System.out.println("Agent event: " + status);
+        }
+        
+        @Override
+        public void onChatEvent(String runId, String sessionKey, String state, Map<String, Object> message) {
+            System.out.println("Chat event: " + state);
+        }
+    });
+}
+
+// 关闭连接
+wsClient.close();
+```
+
+### 异步 Agent 执行
+
+```java
+AsyncAgentService asyncService = new AsyncAgentService(wsClient);
+
+// 异步执行
+asyncService.runAgentAsync("Hello", "main").thenAccept(result -> {
+    System.out.println("Summary: " + result.getSummary());
+});
+```
+
+## 使用配置
 
 ```java
 // 通过配置类
@@ -354,6 +422,151 @@ result.isAllSuccess(); // 是否全部成功
 result.getResponses(); // 响应列表
 ```
 
+## WebSocket API 参考
+
+### OpenClawWsClient
+
+```java
+// 创建客户端
+OpenClawWsClient wsClient = new OpenClawWsClient(baseUrl, token);
+
+// 设置是否需要设备认证（开发环境设为false）
+wsClient.setRequireDevice(false);
+
+// 连接网关
+boolean connected = wsClient.connect();
+
+// 健康检查
+WsResponse health = wsClient.health();
+
+// 状态查询
+WsResponse status = wsClient.status();
+
+// 同步执行Agent
+AgentResult result = wsClient.runAgent(message);
+AgentResult result = wsClient.runAgent(message, agentId);
+AgentResult result = wsClient.runAgent(message, agentId, deliver, timeoutMs);
+
+// 发送消息
+wsClient.sendMessage(target, message);
+
+// 发送系统事件
+wsClient.systemEvent(text);
+
+// 添加事件监听器
+wsClient.addEventListener(listener);
+
+// 移除事件监听器
+wsClient.removeEventListener(listener);
+
+// 检查连接状态
+wsClient.isConnected();
+
+// 关闭连接
+wsClient.close();
+```
+
+### AsyncAgentService
+
+```java
+// 创建异步服务
+AsyncAgentService asyncService = new AsyncAgentService(wsClient);
+
+// 异步执行Agent
+CompletableFuture<AgentResult> future = asyncService.runAgentAsync(message);
+CompletableFuture<AgentResult> future = asyncService.runAgentAsync(message, agentId);
+
+// 注册回调
+asyncService.registerCallback(runId, callback);
+
+// 注销回调
+asyncService.unregisterCallback(runId);
+```
+
+### AgentResult
+
+```java
+AgentResult result = wsClient.runAgent("message", "main");
+
+result.getRunId();      // 获取RunId
+result.getStatus();     // 获取状态 (accepted, ok, error)
+result.getSummary();    // 获取Agent回复
+result.getError();      // 获取错误信息
+
+result.isAccepted();     // 是否已接受
+result.isOk();          // 是否成功
+result.isError();       // 是否有错误
+```
+
+### WsEventListener
+
+```java
+wsClient.addEventListener(new WsEventListener() {
+    @Override
+    public void onEvent(String event, Map<String, Object> payload) {
+        // 通用事件处理
+    }
+    
+    @Override
+    public void onAgentEvent(String runId, String status, Map<String, Object> payload) {
+        // Agent事件 (start, progress, end, error)
+    }
+    
+    @Override
+    public void onChatEvent(String runId, String sessionKey, String state, Map<String, Object> message) {
+        // Chat事件 (delta, final)
+    }
+    
+    @Override
+    public void onPresenceUpdate(Map<String, Object> presence) {
+        // 在线状态更新
+    }
+    
+    @Override
+    public void onTick() {
+        // 心跳 tick
+    }
+    
+    @Override
+    public void onError(Throwable t) {
+        // 错误处理
+    }
+});
+```
+
+### 会话键 (sessionKey)
+
+OpenClaw 使用 `sessionKey` 标识会话，格式如下：
+
+| 类型 | 格式 | 说明 |
+|------|------|------|
+| 主会话 | `agent:<agentId>:main` | 直接聊天 |
+| 私信 | `agent:<agentId>:dm:<peerId>` | 按发送者隔离 |
+| 群组 | `agent:<agentId>:<channel>:group:<id>` | 群组聊天 |
+| Webhook | `agent:<agentId>:hook:<uuid>` | Webhook触发 |
+| 定时任务 | `agent:<agentId>:cron:<jobId>` | 定时任务 |
+
+## 未来优化方向
+
+### 高优先级
+
+- [ ] **流式响应支持** - 实现 Server-Sent Events (SSE) 流式读取 agent 输出
+- [ ] **连接自动重连** - WebSocket 断开后自动重连机制
+- [ ] **消息队列** - 支持消息持久化和可靠投递
+
+### 中优先级
+
+- [ ] **会话历史查询** - 通过 `sessions.list` 和 `sessions.history` API 查询历史会话
+- [ ] **多代理并发** - 支持同时运行多个 agent 实例
+- [ ] **代理工具目录** - 通过 `tools.catalog` API 获取可用工具列表
+
+### 低优先级
+
+- [ ] **TLS/SSL 支持** - WebSocket TLS 加密连接
+- [ ] **代理隧道** - 支持通过代理服务器连接
+- [ ] **指标监控** - 连接状态、请求延迟等 metrics 收集
+- [ ] **Spring Boot Starter** - 自动配置支持
+
 ## 构建
 
 ```bash
@@ -365,3 +578,13 @@ mvn clean package
 ```bash
 mvn test
 ```
+
+## 许可证
+
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+## 相关链接
+
+- [OpenClaw 官方文档](https://docs.openclaw.ai)
+- [OpenClaw GitHub](https://github.com/openwebf/openclaw)
+- [Gateway Protocol](https://docs.openclaw.ai/gateway/protocol)
