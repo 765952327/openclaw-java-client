@@ -434,7 +434,7 @@ public class OpenClawWsClient {
                                 result.setStatus("ok");
                                 result.setSummary(summary);
                                 
-                                logger.info("Agent completed via chat event, summary: {}", summary);
+                                logger.info("Agent completed via chat event, summary: \n {}", summary);
                                 return result;
                             }
                         }
