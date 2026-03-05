@@ -238,6 +238,122 @@ hooks:
 | `connect-timeout-ms` | 10000 | 连接超时 |
 | `read-timeout-ms` | 30000 | 读取超时 |
 
+## 多实例支持
+
+### 配置多个OpenClaw实例
+
+```yaml
+openclaw:
+  multi-instances:
+    enabled: true
+    default-instance: local
+    instances:
+      local:
+        base-url: http://127.0.0.1:18789
+        token: local-token
+        enabled: true
+        hooks:
+          enabled: true
+          token: webhook-token
+      production:
+        base-url: https://openclaw.example.com
+        token: prod-token
+        enabled: true
+      staging:
+        base-url: https://staging.openclaw.example.com
+        token: staging-token
+        enabled: false
+```
+
+### 使用多实例
+
+```java
+MultiOpenClawProperties multiProps = new MultiOpenClawProperties();
+
+// 配置实例
+MultiOpenClawProperties.InstanceConfig localConfig = new MultiOpenClawProperties.InstanceConfig();
+localConfig.setBaseUrl("http://127.0.0.1:18789");
+localConfig.setToken("token");
+
+MultiOpenClawProperties.InstanceConfig prodConfig = new MultiOpenClawProperties.InstanceConfig();
+prodConfig.setBaseUrl("https://openclaw.example.com");
+prodConfig.setToken("prod-token");
+
+Map<String, MultiOpenClawProperties.InstanceConfig> instances = new HashMap<>();
+instances.put("local", localConfig);
+instances.put("production", prodConfig);
+
+multiProps.setInstances(instances);
+multiProps.setDefaultInstance("local");
+
+// 创建管理器
+OpenClawClientManager manager = new OpenClawClientManager(multiProps);
+
+// 使用指定实例
+OpenClawClient localClient = manager.getClient("local");
+OpenClawClient prodClient = manager.getClient("production");
+
+// 使用默认实例
+manager.getClient().runAgent("message");
+```
+
+## 批处理请求
+
+### 串行请求
+
+```java
+OpenClawClient client = new OpenClawClient(baseUrl, token);
+BatchRequestService batchService = new BatchRequestService(client);
+
+List<String> messages = Arrays.asList(
+    "Task 1",
+    "Task 2",
+    "Task 3"
+);
+
+// 串行wake请求
+List<OpenClawResponse> responses = batchService.sendSerialWake(messages);
+
+// 或使用AgentRequest
+List<AgentRequest> requests = Arrays.asList(
+    AgentRequest.builder().message("Task 1").name("Agent").build(),
+    AgentRequest.builder().message("Task 2").name("Agent").build()
+);
+
+BatchRequestService.BatchResult result = batchService.sendSerialWithResult(requests);
+System.out.println(result); // BatchResult{total=2, success=2, failed=0}
+```
+
+### 并行请求
+
+```java
+// 并行wake请求
+List<OpenClawResponse> responses = batchService.sendParallelWake(messages);
+
+// 并行agent请求
+BatchRequestService.BatchResult result = batchService.sendParallelWithResult(requests);
+```
+
+### 自定义并行请求
+
+```java
+List<OpenClawResponse> responses = batchService.sendParallelCustom(items, item -> {
+    return client.runAgent(item.getMessage(), item.getAgent());
+});
+```
+
+### BatchResult
+
+```java
+BatchRequestService.BatchResult result = batchService.sendParallelWithResult(requests);
+
+result.getTotal();     // 总数
+result.getSuccess();   // 成功数
+result.getFailed();    // 失败数
+result.isAllSuccess(); // 是否全部成功
+result.getResponses(); // 响应列表
+```
+
 ## 构建
 
 ```bash

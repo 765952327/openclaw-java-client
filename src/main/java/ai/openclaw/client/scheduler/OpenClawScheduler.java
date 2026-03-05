@@ -4,13 +4,13 @@ import ai.openclaw.client.OpenClawClient;
 import ai.openclaw.client.config.OpenClawProperties;
 import ai.openclaw.client.model.AgentRequest;
 import ai.openclaw.client.model.OpenClawResponse;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.annotation.SchedulingConfigurer;
 import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 
-import jakarta.annotation.PostConstruct;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 

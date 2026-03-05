@@ -6,6 +6,26 @@ openclaw:
   default-wake-mode: now
   connect-timeout-ms: 10000
   read-timeout-ms: 30000
+
+  multi-instances:
+    enabled: true
+    default-instance: local
+    instances:
+      local:
+        base-url: http://127.0.0.1:18789
+        token: local-token
+        enabled: true
+        hooks:
+          enabled: true
+          token: gmail_hook_2026
+      production:
+        base-url: https://openclaw.example.com
+        token: prod-token
+        enabled: true
+      staging:
+        base-url: https://staging.openclaw.example.com
+        token: staging-token
+        enabled: false
   
   hooks:
     enabled: true

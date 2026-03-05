@@ -1,13 +1,14 @@
 package ai.openclaw.client.scheduler;
 
 import ai.openclaw.client.OpenClawClient;
-import ai.openclaw.client.config.OpenClawProperties;
 import ai.openclaw.client.model.AgentRequest;
 import ai.openclaw.client.model.OpenClawResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 

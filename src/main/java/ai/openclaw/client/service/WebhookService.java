@@ -2,9 +2,6 @@ package ai.openclaw.client.service;
 
 import ai.openclaw.client.config.HooksConfig;
 import ai.openclaw.client.config.OpenClawProperties;
-import ai.openclaw.client.model.AgentRequest;
-import ai.openclaw.client.model.OpenClawResponse;
-import ai.openclaw.client.model.WakeRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

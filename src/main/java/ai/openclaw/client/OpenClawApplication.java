@@ -2,7 +2,6 @@ package ai.openclaw.client;
 
 import ai.openclaw.client.config.OpenClawProperties;
 import ai.openclaw.client.scheduler.OpenClawScheduler;
-import ai.openclaw.client.scheduler.OpenClawTaskScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
