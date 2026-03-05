@@ -31,7 +31,7 @@ public class WsResponse {
     private Integer seq;
 
     @JsonProperty("stateVersion")
-    private Long stateVersion;
+    private Object stateVersion;
 
     @JsonProperty("method")
     private String method;
@@ -92,11 +92,11 @@ public class WsResponse {
         this.seq = seq;
     }
 
-    public Long getStateVersion() {
+    public Object getStateVersion() {
         return stateVersion;
     }
 
-    public void setStateVersion(Long stateVersion) {
+    public void setStateVersion(Object stateVersion) {
         this.stateVersion = stateVersion;
     }
 

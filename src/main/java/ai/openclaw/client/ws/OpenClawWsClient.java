@@ -194,6 +194,10 @@ public class OpenClawWsClient {
 
     private void processRequest(PendingRequest request) {
         try {
+            pendingRequests.entrySet().removeIf(entry -> 
+                entry.getKey().startsWith("agent:") || entry.getKey().startsWith("chat:")
+            );
+            
             Map<String, Object> params = new HashMap<>();
             String idempotencyKey = UUID.randomUUID().toString();
             params.put("idempotencyKey", idempotencyKey);
