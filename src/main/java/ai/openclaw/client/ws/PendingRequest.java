@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit;
 
 public class PendingRequest {
     
+    private final String uid;
     private final String id;
     private final String message;
     private final String agentId;
@@ -18,6 +19,7 @@ public class PendingRequest {
     private volatile long createdAt;
     
     public PendingRequest(
+            String uid,
             String message,
             String agentId,
             Boolean deliver,
@@ -25,6 +27,7 @@ public class PendingRequest {
             long requestTimeoutMs,
             long resultTimeoutMs,
             CompletableFuture<AgentResult> future) {
+        this.uid = uid;
         this.id = java.util.UUID.randomUUID().toString();
         this.message = message;
         this.agentId = agentId;
@@ -34,6 +37,10 @@ public class PendingRequest {
         this.resultTimeoutMs = resultTimeoutMs;
         this.future = future;
         this.createdAt = System.currentTimeMillis();
+    }
+    
+    public String getUid() {
+        return uid;
     }
     
     public String getId() {

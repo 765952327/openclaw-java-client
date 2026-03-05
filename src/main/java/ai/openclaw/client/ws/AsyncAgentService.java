@@ -54,12 +54,17 @@ public class AsyncAgentService {
     }
 
     public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, Boolean deliver) {
-        return wsClient.runAgentAsync(message, agentId, null, null);
+        return wsClient.runAgentAsync(null, message, agentId, deliver, null, null);
     }
 
     public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, 
             Long requestTimeoutMs, Long resultTimeoutMs) {
-        return wsClient.runAgentAsync(message, agentId, requestTimeoutMs, resultTimeoutMs);
+        return wsClient.runAgentAsync(null, message, agentId, null, requestTimeoutMs, resultTimeoutMs);
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String uid, String message, String agentId, 
+            Boolean deliver, Long requestTimeoutMs, Long resultTimeoutMs) {
+        return wsClient.runAgentAsync(uid, message, agentId, deliver, requestTimeoutMs, resultTimeoutMs);
     }
 
     public int getQueueSize() {

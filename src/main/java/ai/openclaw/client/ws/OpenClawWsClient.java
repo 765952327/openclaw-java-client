@@ -235,9 +235,11 @@ public class OpenClawWsClient {
             
             if ("accepted".equals(status)) {
                 AgentResult result = waitForAgentResult(runId, request.getResultTimeoutMs());
+                result.setUid(request.getUid());
                 request.getFuture().complete(result);
             } else if ("ok".equals(status)) {
                 AgentResult result = new AgentResult();
+                result.setUid(request.getUid());
                 result.setRunId(runId);
                 result.setStatus(status);
                 
@@ -563,41 +565,29 @@ public class OpenClawWsClient {
     }
 
     public AgentResult runAgent(String message) throws IOException {
-        try {
-            return runAgentAsync(message, null, null, null).get(defaultResultTimeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted", e);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof IOException) {
-                throw (IOException) e.getCause();
-            }
-            throw new IOException(e.getCause());
-        } catch (TimeoutException e) {
-            throw new IOException("Agent execution timeout", e);
-        }
+        return runAgent((String) null, message, null, null, 0);
     }
 
     public AgentResult runAgent(String message, String agentId) throws IOException {
-        try {
-            return runAgentAsync(message, agentId, null, null).get(defaultResultTimeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted", e);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof IOException) {
-                throw (IOException) e.getCause();
-            }
-            throw new IOException(e.getCause());
-        } catch (TimeoutException e) {
-            throw new IOException("Agent execution timeout", e);
-        }
+        return runAgent(null, message, agentId, null, 0);
     }
 
     public AgentResult runAgent(String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
+        return runAgent(null, message, agentId, deliver, timeoutMs);
+    }
+
+    public AgentResult runAgentWithUid(String uid, String message) throws IOException {
+        return runAgent(uid, message, null, null, 0);
+    }
+
+    public AgentResult runAgentWithUid(String uid, String message, String agentId) throws IOException {
+        return runAgent(uid, message, agentId, null, 0);
+    }
+
+    public AgentResult runAgentWithUid(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
         try {
-            return runAgentAsync(message, agentId, null, timeoutMs).get(effectiveTimeout, TimeUnit.MILLISECONDS);
+            return runAgentAsync(uid, message, agentId, deliver, null, null).get(effectiveTimeout, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted", e);
@@ -611,8 +601,37 @@ public class OpenClawWsClient {
         }
     }
 
-    public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, 
-            Long requestTimeoutMs, Long resultTimeoutMs) {
+    private AgentResult runAgent(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
+        long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
+        try {
+            return runAgentAsync(uid, message, agentId, deliver, null, null).get(effectiveTimeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            throw new IOException(e.getCause());
+        } catch (TimeoutException e) {
+            throw new IOException("Agent execution timeout", e);
+        }
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String message) {
+        return runAgentAsync(null, message, null, null, null, null);
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId) {
+        return runAgentAsync(null, message, agentId, null, null, null);
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, Boolean deliver) {
+        return runAgentAsync(null, message, agentId, deliver, null, null);
+    }
+
+    public CompletableFuture<AgentResult> runAgentAsync(String uid, String message, String agentId, 
+            Boolean deliver, Long requestTimeoutMs, Long resultTimeoutMs) {
         
         if (requestQueue.size() >= maxQueueCapacity) {
             return CompletableFuture.failedFuture(
@@ -628,9 +647,10 @@ public class OpenClawWsClient {
         }
         
         PendingRequest request = new PendingRequest(
+            uid,
             message,
             agentId,
-            null,
+            deliver,
             sessionKey,
             requestTimeoutMs != null ? requestTimeoutMs : defaultRequestTimeoutMs,
             resultTimeoutMs != null ? resultTimeoutMs : defaultResultTimeoutMs,

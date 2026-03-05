@@ -9,6 +9,9 @@ import java.util.Map;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class AgentResult {
 
+    @JsonProperty("uid")
+    private String uid;
+
     @JsonProperty("runId")
     private String runId;
 
@@ -75,6 +78,14 @@ public class AgentResult {
         this.events = events;
     }
 
+    public String getUid() {
+        return uid;
+    }
+
+    public void setUid(String uid) {
+        this.uid = uid;
+    }
+
     public boolean isAccepted() {
         return "accepted".equals(status);
     }
@@ -90,7 +101,8 @@ public class AgentResult {
     @Override
     public String toString() {
         return "AgentResult{" +
-                "runId='" + runId + '\'' +
+                "uid='" + uid + '\'' +
+                ", runId='" + runId + '\'' +
                 ", status='" + status + '\'' +
                 ", summary='" + summary + '\'' +
                 ", error='" + error + '\'' +
