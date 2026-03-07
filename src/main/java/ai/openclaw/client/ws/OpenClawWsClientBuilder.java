@@ -19,6 +19,9 @@ public class OpenClawWsClientBuilder {
     private long retryInitialDelayMs = 500;
     private long retryMaxDelayMs = 5000;
     private boolean compressionEnabled = true;
+    private boolean sslVerifyEnabled = true;
+    private String proxyHost = null;
+    private int proxyPort = 0;
 
     public OpenClawWsClientBuilder baseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
@@ -105,6 +108,17 @@ public class OpenClawWsClientBuilder {
         return this;
     }
 
+    public OpenClawWsClientBuilder sslVerifyEnabled(boolean enabled) {
+        this.sslVerifyEnabled = enabled;
+        return this;
+    }
+
+    public OpenClawWsClientBuilder proxy(String host, int port) {
+        this.proxyHost = host;
+        this.proxyPort = port;
+        return this;
+    }
+
     public OpenClawWsClient build() {
         return new OpenClawWsClient(
             baseUrl, token,
@@ -112,7 +126,7 @@ public class OpenClawWsClientBuilder {
             autoReconnect, maxReconnectRetries, reconnectInitialDelayMs, reconnectMaxDelayMs,
             healthCheckEnabled, healthCheckIntervalMs, healthCheckTimeoutMs,
             retryEnabled, maxRetryCount, retryInitialDelayMs, retryMaxDelayMs,
-            compressionEnabled
+            compressionEnabled, sslVerifyEnabled, proxyHost, proxyPort
         );
     }
 

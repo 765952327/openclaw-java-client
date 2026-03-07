@@ -82,6 +82,8 @@ public class OpenClawWsClient {
     private static final long DEFAULT_RETRY_MAX_DELAY_MS = 5000;
     /** 默认启用压缩 */
     private static final boolean DEFAULT_COMPRESSION_ENABLED = true;
+    /** 默认禁用 SSL 验证 */
+    private static final boolean DEFAULT_SSL_VERIFY_ENABLED = true;
 
     // ==================== 基础配置 ====================
     
@@ -181,6 +183,15 @@ public class OpenClawWsClient {
     
     /** 是否启用 gzip 压缩 */
     private final boolean compressionEnabled;
+    
+    // ==================== 安全配置 ====================
+    
+    /** 是否启用 SSL 验证 */
+    private final boolean sslVerifyEnabled;
+    /** 代理主机 */
+    private final String proxyHost;
+    /** 代理端口 */
+    private final int proxyPort;
 
     /**
      * 构造函数（使用默认配置）
@@ -193,7 +204,7 @@ public class OpenClawWsClient {
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
             true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
             true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS,
-            DEFAULT_COMPRESSION_ENABLED);
+            DEFAULT_COMPRESSION_ENABLED, DEFAULT_SSL_VERIFY_ENABLED, null, 0);
     }
 
     /**
@@ -211,7 +222,7 @@ public class OpenClawWsClient {
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
             true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
             true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS,
-            DEFAULT_COMPRESSION_ENABLED);
+            DEFAULT_COMPRESSION_ENABLED, DEFAULT_SSL_VERIFY_ENABLED, null, 0);
     }
 
     /**
@@ -241,6 +252,19 @@ public class OpenClawWsClient {
             boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs,
             boolean retryEnabled, int maxRetryCount, long retryInitialDelayMs, long retryMaxDelayMs,
             boolean compressionEnabled) {
+        this(baseUrl, token, maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
+            autoReconnect, maxReconnectRetries, reconnectInitialDelayMs, reconnectMaxDelayMs,
+            healthCheckEnabled, healthCheckIntervalMs, healthCheckTimeoutMs,
+            retryEnabled, maxRetryCount, retryInitialDelayMs, retryMaxDelayMs,
+            compressionEnabled, DEFAULT_SSL_VERIFY_ENABLED, null, 0);
+    }
+
+    public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
+            long defaultRequestTimeoutMs, long defaultResultTimeoutMs,
+            boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs,
+            boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs,
+            boolean retryEnabled, int maxRetryCount, long retryInitialDelayMs, long retryMaxDelayMs,
+            boolean compressionEnabled, boolean sslVerifyEnabled, String proxyHost, int proxyPort) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
@@ -260,6 +284,9 @@ public class OpenClawWsClient {
         this.retryInitialDelayMs = retryInitialDelayMs;
         this.retryMaxDelayMs = retryMaxDelayMs;
         this.compressionEnabled = compressionEnabled;
+        this.sslVerifyEnabled = sslVerifyEnabled;
+        this.proxyHost = proxyHost;
+        this.proxyPort = proxyPort;
         
         this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
         this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -271,6 +298,11 @@ public class OpenClawWsClient {
         OkHttpClient.Builder clientBuilder = new OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .pingInterval(30, TimeUnit.SECONDS);
+        
+        if (proxyHost != null && proxyPort > 0) {
+            clientBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, 
+                new java.net.InetSocketAddress(proxyHost, proxyPort)));
+        }
         
         this.httpClient = clientBuilder.build();
     }
@@ -1686,6 +1718,18 @@ public class OpenClawWsClient {
 
     public boolean isCompressionEnabled() {
         return compressionEnabled;
+    }
+
+    public boolean isSslVerifyEnabled() {
+        return sslVerifyEnabled;
+    }
+
+    public String getProxyHost() {
+        return proxyHost;
+    }
+
+    public int getProxyPort() {
+        return proxyPort;
     }
 
     private final ClientMetrics metrics = new ClientMetrics();
