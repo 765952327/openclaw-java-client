@@ -74,6 +74,12 @@ public class OpenClawWsClient {
     private static final long DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30000;
     /** 默认健康检查超时（毫秒） */
     private static final long DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 10000;
+    /** 默认最大重试次数 */
+    private static final int DEFAULT_MAX_RETRY_COUNT = 3;
+    /** 默认重试初始延迟（毫秒） */
+    private static final long DEFAULT_RETRY_INITIAL_DELAY_MS = 500;
+    /** 默认重试最大延迟（毫秒） */
+    private static final long DEFAULT_RETRY_MAX_DELAY_MS = 5000;
 
     // ==================== 基础配置 ====================
     
@@ -157,6 +163,17 @@ public class OpenClawWsClient {
     private volatile long lastHealthCheckTime = 0;
     /** 上次健康检查结果 */
     private volatile boolean lastHealthCheckResult = false;
+    
+    // ==================== 重试配置 ====================
+    
+    /** 是否启用重试 */
+    private final boolean retryEnabled;
+    /** 最大重试次数 */
+    private final int maxRetryCount;
+    /** 重试初始延迟（毫秒） */
+    private final long retryInitialDelayMs;
+    /** 重试最大延迟（毫秒） */
+    private final long retryMaxDelayMs;
 
     /**
      * 构造函数（使用默认配置）
@@ -167,7 +184,8 @@ public class OpenClawWsClient {
     public OpenClawWsClient(String baseUrl, String token) {
         this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS,
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
-            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
+            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS);
     }
 
     /**
@@ -183,7 +201,8 @@ public class OpenClawWsClient {
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs) {
         this(baseUrl, token, maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
-            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
+            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS);
     }
 
     /**
@@ -201,11 +220,16 @@ public class OpenClawWsClient {
      * @param healthCheckEnabled        是否启用健康检查
      * @param healthCheckIntervalMs      健康检查间隔（毫秒）
      * @param healthCheckTimeoutMs      健康检查超时（毫秒）
+     * @param retryEnabled              是否启用重试
+     * @param maxRetryCount             最大重试次数
+     * @param retryInitialDelayMs       重试初始延迟（毫秒）
+     * @param retryMaxDelayMs           重试最大延迟（毫秒）
      */
     public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs,
             boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs,
-            boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs) {
+            boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs,
+            boolean retryEnabled, int maxRetryCount, long retryInitialDelayMs, long retryMaxDelayMs) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
@@ -220,6 +244,10 @@ public class OpenClawWsClient {
         this.healthCheckEnabled = healthCheckEnabled;
         this.healthCheckIntervalMs = healthCheckIntervalMs;
         this.healthCheckTimeoutMs = healthCheckTimeoutMs;
+        this.retryEnabled = retryEnabled;
+        this.maxRetryCount = maxRetryCount;
+        this.retryInitialDelayMs = retryInitialDelayMs;
+        this.retryMaxDelayMs = retryMaxDelayMs;
         
         this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
         this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -238,9 +266,9 @@ public class OpenClawWsClient {
      * 连接到 OpenClaw Gateway
      * 
      * @return 连接是否成功
-     * @throws IOException 连接失败时抛出
+     * @throws OpenClawException 连接失败时抛出
      */
-    public boolean connect() throws IOException {
+    public boolean connect() throws OpenClawException {
         if (connected) {
             return true;
         }
@@ -382,7 +410,7 @@ public class OpenClawWsClient {
                 logger.warn("Health check failed: {}", response);
                 for (WsEventListener listener : eventListeners) {
                     try {
-                        listener.onHealthCheck(false, new IOException("Health check failed"));
+                        listener.onHealthCheck(false, new OpenClawException("Health check failed"));
                     } catch (Exception e) {
                         logger.error("Health check listener error: {}", e.getMessage());
                     }
@@ -427,13 +455,15 @@ public class OpenClawWsClient {
             try {
                 PendingRequest request = requestQueue.poll(1, TimeUnit.SECONDS);
                 
+                metrics.updateQueueSize(requestQueue.size());
+                
                 if (request == null) {
                     continue;
                 }
                 
                 if (!connected) {
                     request.getFuture().completeExceptionally(
-                        new IOException("WebSocket not connected")
+                        new OpenClawException("WebSocket not connected")
                     );
                     continue;
                 }
@@ -566,7 +596,7 @@ public class OpenClawWsClient {
                 logger.error("Max reconnection attempts reached, giving up");
                 for (WsEventListener listener : eventListeners) {
                     try {
-                        listener.onReconnectFailed(new IOException("Max reconnection attempts reached"));
+                        listener.onReconnectFailed(new OpenClawException("Max reconnection attempts reached"));
                     } catch (Exception e) {
                         logger.error("Reconnect failed listener error: {}", e.getMessage());
                     }
@@ -607,7 +637,7 @@ public class OpenClawWsClient {
             
             if (!Boolean.TRUE.equals(response.getOk())) {
                 request.getFuture().completeExceptionally(
-                    new IOException("Agent request failed: " + response.getErrorMessage())
+                    new OpenClawException("Agent request failed: " + response.getErrorMessage())
                 );
                 return;
             }
@@ -641,7 +671,7 @@ public class OpenClawWsClient {
                 request.getFuture().complete(result);
             } else {
                 request.getFuture().completeExceptionally(
-                    new IOException("Unknown status: " + status)
+                    new OpenClawException("Unknown status: " + status)
                 );
             }
             
@@ -852,8 +882,62 @@ public class OpenClawWsClient {
             throw new OpenClawRequestException(OpenClawErrorCode.WEBSOCKET_SEND_FAILED, "Failed to send request", e);
         }
     }
+    
+    private <T> T executeWithRetry(RetryableOperation<T> operation) {
+        if (!retryEnabled) {
+            return operation.execute();
+        }
+        
+        int attempt = 0;
+        long delay = retryInitialDelayMs;
+        
+        while (attempt < maxRetryCount) {
+            try {
+                return operation.execute();
+            } catch (OpenClawException e) {
+                attempt++;
+                if (attempt >= maxRetryCount || !isRetryable(e)) {
+                    throw e;
+                }
+                
+                logger.warn("Request failed (attempt {}/{}), retrying after {}ms: {}", 
+                    attempt, maxRetryCount, delay, e.getMessage());
+                
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+                
+                delay = Math.min(delay * 2, retryMaxDelayMs);
+            }
+        }
+        
+        throw new OpenClawRequestException(OpenClawErrorCode.REQUEST_FAILED, "Max retries exceeded");
+    }
+    
+    private boolean isRetryable(OpenClawException e) {
+        if (e instanceof OpenClawConnectionException) {
+            return true;
+        }
+        if (e instanceof OpenClawTimeoutException) {
+            return true;
+        }
+        if (e instanceof OpenClawRequestException) {
+            OpenClawErrorCode code = e.getErrorCode();
+            return code == OpenClawErrorCode.WEBSOCKET_SEND_FAILED || 
+                   code == OpenClawErrorCode.REQUEST_TIMEOUT;
+        }
+        return false;
+    }
+    
+    @FunctionalInterface
+    private interface RetryableOperation<T> {
+        T execute();
+    }
 
-    private WsResponse waitForResponse(String requestId, long timeoutMs) throws TimeoutException, IOException {
+    private WsResponse waitForResponse(String requestId, long timeoutMs) throws TimeoutException, OpenClawException {
         if (timeoutMs <= 0) {
             timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
         }
@@ -881,7 +965,7 @@ public class OpenClawWsClient {
         throw new OpenClawTimeoutException(OpenClawErrorCode.REQUEST_TIMEOUT, "Request timeout: " + requestId, timeoutMs);
     }
 
-    private AgentResult waitForAgentResult(String runId, long timeoutMs) throws TimeoutException, IOException {
+    private AgentResult waitForAgentResult(String runId, long timeoutMs) throws TimeoutException, OpenClawException {
         if (timeoutMs <= 0) {
             timeoutMs = DEFAULT_RESULT_TIMEOUT_MS;
         }
@@ -993,7 +1077,7 @@ public class OpenClawWsClient {
         return null;
     }
 
-    public WsResponse sendAndWait(String method, Map<String, Object> params, long timeoutMs) throws IOException {
+    public WsResponse sendAndWait(String method, Map<String, Object> params, long timeoutMs) throws OpenClawException {
         String id = java.util.UUID.randomUUID().toString();
         
         WsRequest request = new WsRequest();
@@ -1023,7 +1107,7 @@ public class OpenClawWsClient {
     public WsResponse health() throws OpenClawException {
         try {
             return sendAndWait("health", null, 10000);
-        } catch (IOException e) {
+        } catch (OpenClawException e) {
             throw new OpenClawConnectionException(OpenClawErrorCode.CONNECTION_FAILED, "Health check failed", e);
         }
     }
@@ -1031,9 +1115,53 @@ public class OpenClawWsClient {
     public WsResponse status() throws OpenClawException {
         try {
             return sendAndWait("status", null, 10000);
-        } catch (IOException e) {
+        } catch (OpenClawException e) {
             throw new OpenClawConnectionException(OpenClawErrorCode.CONNECTION_FAILED, "Status check failed", e);
         }
+    }
+
+    public WsResponse sessionsHistory(String sessionKey, int limit) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("sessionKey", sessionKey);
+        params.put("limit", limit);
+        return sendAndWait("sessions.history", params, 30000);
+    }
+
+    public WsResponse sessionsList(int page, int pageSize) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("page", page);
+        params.put("pageSize", pageSize);
+        return sendAndWait("sessions.list", params, 30000);
+    }
+
+    public WsResponse sessionsDelete(String sessionKey) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("sessionKey", sessionKey);
+        return sendAndWait("sessions.delete", params, 30000);
+    }
+
+    public WsResponse toolsCatalog(String category, String keyword, int page, int pageSize) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        if (category != null) params.put("category", category);
+        if (keyword != null) params.put("keyword", keyword);
+        params.put("page", page);
+        params.put("pageSize", pageSize);
+        return sendAndWait("tools.catalog", params, 30000);
+    }
+
+    public WsResponse toolsInvoke(String toolName, Map<String, Object> arguments) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("toolName", toolName);
+        params.put("arguments", arguments);
+        return sendAndWait("tools.invoke", params, 60000);
+    }
+
+    public WsResponse toolsRegister(String toolName, String description, Map<String, Object> schema) throws OpenClawException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("toolName", toolName);
+        params.put("description", description);
+        params.put("schema", schema);
+        return sendAndWait("tools.register", params, 30000);
     }
 
     /**
@@ -1041,9 +1169,9 @@ public class OpenClawWsClient {
      * 
      * @param message 消息内容
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
-    public AgentResult runAgent(String message) throws IOException {
+    public AgentResult runAgent(String message) throws OpenClawException {
         return runAgent((String) null, message, null, null, 0);
     }
 
@@ -1053,9 +1181,9 @@ public class OpenClawWsClient {
      * @param message  消息内容
      * @param agentId  Agent ID
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
-    public AgentResult runAgent(String message, String agentId) throws IOException {
+    public AgentResult runAgent(String message, String agentId) throws OpenClawException {
         return runAgent(null, message, agentId, null, 0);
     }
 
@@ -1067,9 +1195,9 @@ public class OpenClawWsClient {
      * @param deliver   是否投递响应
      * @param timeoutMs 超时时间（毫秒），0 使用默认值
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
-    public AgentResult runAgent(String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
+    public AgentResult runAgent(String message, String agentId, Boolean deliver, long timeoutMs) throws OpenClawException {
         return runAgent(null, message, agentId, deliver, timeoutMs);
     }
 
@@ -1079,9 +1207,9 @@ public class OpenClawWsClient {
      * @param uid      自定义 UID，用于追踪请求
      * @param message  消息内容
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
-    public AgentResult runAgentWithUid(String uid, String message) throws IOException {
+    public AgentResult runAgentWithUid(String uid, String message) throws OpenClawException {
         return runAgent(uid, message, null, null, 0);
     }
 
@@ -1092,9 +1220,9 @@ public class OpenClawWsClient {
      * @param message  消息内容
      * @param agentId  Agent ID
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
-    public AgentResult runAgentWithUid(String uid, String message, String agentId) throws IOException {
+    public AgentResult runAgentWithUid(String uid, String message, String agentId) throws OpenClawException {
         return runAgent(uid, message, agentId, null, 0);
     }
 
@@ -1107,7 +1235,7 @@ public class OpenClawWsClient {
      * @param deliver   是否投递响应
      * @param timeoutMs 超时时间（毫秒）
      * @return Agent 执行结果
-     * @throws IOException 执行失败时抛出
+     * @throws OpenClawException 执行失败时抛出
      */
     public AgentResult runAgentWithUid(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws OpenClawException {
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
@@ -1358,9 +1486,9 @@ public class OpenClawWsClient {
      * @param target  目标标识
      * @param message 消息内容
      * @return 响应结果
-     * @throws IOException 发送失败时抛出
+     * @throws OpenClawException 发送失败时抛出
      */
-    public WsResponse sendMessage(String target, String message) throws IOException {
+    public WsResponse sendMessage(String target, String message) throws OpenClawException {
         Map<String, Object> params = Map.of("target", target, "message", message);
         return sendAndWait("send", params, 30000);
     }
@@ -1370,9 +1498,9 @@ public class OpenClawWsClient {
      * 
      * @param text 事件内容
      * @return 响应结果
-     * @throws IOException 发送失败时抛出
+     * @throws OpenClawException 发送失败时抛出
      */
-    public WsResponse systemEvent(String text) throws IOException {
+    public WsResponse systemEvent(String text) throws OpenClawException {
         Map<String, Object> params = Map.of("text", text);
         return sendAndWait("system-event", params, 10000);
     }
@@ -1523,5 +1651,27 @@ public class OpenClawWsClient {
      */
     public boolean isHealthCheckRunning() {
         return healthCheckThread != null && healthCheckThread.isAlive();
+    }
+
+    public boolean isRetryEnabled() {
+        return retryEnabled;
+    }
+
+    public int getMaxRetryCount() {
+        return maxRetryCount;
+    }
+
+    public long getRetryInitialDelayMs() {
+        return retryInitialDelayMs;
+    }
+
+    public long getRetryMaxDelayMs() {
+        return retryMaxDelayMs;
+    }
+
+    private final ClientMetrics metrics = new ClientMetrics();
+
+    public ClientMetrics getMetrics() {
+        return metrics;
     }
 }

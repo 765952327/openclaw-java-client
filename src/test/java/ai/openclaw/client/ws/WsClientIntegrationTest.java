@@ -197,7 +197,8 @@ public class WsClientIntegrationTest {
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
             true, 5, 2000, 10000,
-            false, 30000, 10000
+            false, 30000, 10000,
+            false, 3, 500, 5000
         );
         customClient.setRequireDevice(false);
         
@@ -449,7 +450,8 @@ public class WsClientIntegrationTest {
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
             true, 5, 2000, 10000,
-            true, 5000, 3000
+            true, 5000, 3000,
+            true, 3, 500, 5000
         );
         healthCheckClient.setRequireDevice(false);
         
@@ -472,7 +474,8 @@ public class WsClientIntegrationTest {
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
             true, 5, 2000, 10000,
-            false, 5000, 3000
+            false, 5000, 3000,
+            false, 3, 500, 5000
         );
         disabledClient.setRequireDevice(false);
         
@@ -491,7 +494,8 @@ public class WsClientIntegrationTest {
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
             true, 5, 2000, 10000,
-            true, 10000, 5000
+            true, 10000, 5000,
+            true, 3, 500, 5000
         );
         client.setRequireDevice(false);
         
@@ -527,7 +531,8 @@ public class WsClientIntegrationTest {
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
             true, 5, 2000, 10000,
-            true, 5000, 3000
+            true, 5000, 3000,
+            true, 3, 500, 5000
         );
         healthCheckClient.setRequireDevice(false);
         
