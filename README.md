@@ -3,7 +3,13 @@
 Java 客户端，用于连接 OpenClaw 自动化平台。
 
 [![Java](https://img.shields.io/badge/Java-17%2B-blue?style=flat&logo=java)](https://www.java.com/)
+[![Maven Central](https://img.shields.io/maven-central/v/cn.welsione/openclaw-java-client)](https://mvnrepository.com/artifact/cn.welsione/openclaw-java-client)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/765952327/openclaw-java-client)](https://github.com/765952327/openclaw-java-client/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/765952327/openclaw-java-client)](https://github.com/765952327/openclaw-java-client/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/765952327/openclaw-java-client)](https://github.com/765952327/openclaw-java-client/network)
+[![GitHub Issues](https://img.shields.io/github/issues/765952327/openclaw-java-client)](https://github.com/765952327/openclaw-java-client/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/765952327/openclaw-java-client)](https://github.com/765952327/openclaw-java-client/commits)
 
 ## 功能
 
