@@ -43,9 +43,9 @@
 
 ### 安全
 
-- [ ] **TLS/SSL** - WebSocket TLS 加密连接
-- [ ] **代理支持** - 支持 HTTP/SOCKS 代理
-- [ ] **签名验证** - 验证消息来源
+- [x] **TLS/SSL** - WebSocket TLS 加密连接
+- [x] **代理支持** - 支持 HTTP/SOCKS 代理
+- [x] **签名验证** - 验证消息来源
 
 ### 可观测性
 

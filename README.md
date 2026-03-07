@@ -15,9 +15,14 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 | 健康检查 | 定期检查连接状态、失败时触发重连 |
 | 消息重试 | 失败请求自动重试、指数退避 |
 | 请求队列 | 有界队列、防内存溢出、超时保护 |
+| 连接池 | 多连接并发、自动负载均衡 |
+| 本地缓存 | TTL 缓存、减少重复请求 |
 | Metrics | 请求延迟、队列大小等指标统计 |
 | 统一异常 | 错误码分类、清晰的错误信息 |
 | DSL 构建器 | 流式 API 配置客户端 |
+| TLS/SSL | 安全连接支持 |
+| 代理支持 | HTTP/SOCKS 代理 |
+| 消息签名 | HMAC-SHA256 签名验证 |
 | Spring Boot | 自动配置、零 XML 配置 |
 
 ## 快速开始
@@ -277,6 +282,22 @@ client.sessionsDelete(sessionKey);
 client.toolsCatalog(category, keyword, page, pageSize);
 client.toolsInvoke(toolName, arguments);
 client.toolsRegister(toolName, description, schema);
+
+// 连接池
+OpenClawWsClientPool pool = new OpenClawWsClientPool(baseUrl, token, 5);
+pool.connectAll();
+OpenClawWsClient client = pool.getClient();
+pool.closeAll();
+
+// 缓存
+client.getCache().put("agents", agentsList);
+client.getCache().put("data", data, 60000);
+Object cached = client.getCache().get("key");
+
+// 签名验证
+MessageSigner signer = new MessageSigner(secret);
+String signature = signer.sign(payload);
+boolean valid = signer.verify(payload, signature);
 
 // 状态
 client.isConnected();
