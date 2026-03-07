@@ -198,7 +198,8 @@ public class WsClientIntegrationTest {
             500, 30000, 120000,
             true, 5, 2000, 10000,
             false, 30000, 10000,
-            false, 3, 500, 5000
+            false, 3, 500, 5000,
+            true, true, null, 0
         );
         customClient.setRequireDevice(false);
         
@@ -451,7 +452,8 @@ public class WsClientIntegrationTest {
             500, 30000, 120000,
             true, 5, 2000, 10000,
             true, 5000, 3000,
-            true, 3, 500, 5000
+            true, 3, 500, 5000,
+            true, true, null, 0
         );
         healthCheckClient.setRequireDevice(false);
         
@@ -475,7 +477,8 @@ public class WsClientIntegrationTest {
             500, 30000, 120000,
             true, 5, 2000, 10000,
             false, 5000, 3000,
-            false, 3, 500, 5000
+            false, 3, 500, 5000,
+            true, true, null, 0
         );
         disabledClient.setRequireDevice(false);
         
@@ -495,7 +498,8 @@ public class WsClientIntegrationTest {
             500, 30000, 120000,
             true, 5, 2000, 10000,
             true, 10000, 5000,
-            true, 3, 500, 5000
+            true, 3, 500, 5000,
+            true, true, null, 0
         );
         client.setRequireDevice(false);
         
@@ -532,7 +536,8 @@ public class WsClientIntegrationTest {
             500, 30000, 120000,
             true, 5, 2000, 10000,
             true, 5000, 3000,
-            true, 3, 500, 5000
+            true, 3, 500, 5000,
+            true, true, null, 0
         );
         healthCheckClient.setRequireDevice(false);
         
