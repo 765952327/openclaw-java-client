@@ -10,8 +10,14 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 | 功能 | 说明 |
 |------|------|
 | WebSocket | 实时双向通信、事件监听、同步/异步调用 |
-| Webhook | HTTP 方式触发自动化 |
+| 流式响应 | 支持实时流式输出、思考过程、工具调用 |
+| 自动重连 | 指数退避策略、自动恢复连接 |
+| 健康检查 | 定期检查连接状态、失败时触发重连 |
+| 消息重试 | 失败请求自动重试、指数退避 |
 | 请求队列 | 有界队列、防内存溢出、超时保护 |
+| Metrics | 请求延迟、队列大小等指标统计 |
+| 统一异常 | 错误码分类、清晰的错误信息 |
+| DSL 构建器 | 流式 API 配置客户端 |
 | Spring Boot | 自动配置、零 XML 配置 |
 
 ## 快速开始
@@ -22,7 +28,7 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 <dependency>
     <groupId>ai.openclaw</groupId>
     <artifactId>openclaw-java-client</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 </dependency>
 ```
 
@@ -46,6 +52,19 @@ System.out.println(result.getSummary());  // 输出: 1+1 = 2 ✨
 client.close();
 ```
 
+### 使用 DSL 构建器
+
+```java
+OpenClawWsClient client = OpenClawWsClientBuilder.create()
+    .baseUrl("http://127.0.0.1:18789")
+    .token("ollama")
+    .healthCheckEnabled(true)
+    .healthCheckIntervalMs(10000)
+    .retryEnabled(true)
+    .maxRetryCount(3)
+    .build();
+```
+
 ### 异步调用
 
 ```java
@@ -56,6 +75,37 @@ future.thenAccept(result -> System.out.println(result.getSummary()));
 // 带 UID（用于追踪）
 AgentResult result = client.runAgentWithUid("user-001", "你好", "main");
 System.out.println(result.getUid());  // user-001
+```
+
+### 流式响应
+
+```java
+client.runAgentStream("你好", "main", new AgentStreamCallback() {
+    @Override
+    public void onStart(String runId, Map<String, Object> metadata) {
+        System.out.println("开始执行: " + runId);
+    }
+
+    @Override
+    public void onOutput(String runId, String text, Map<String, Object> data) {
+        System.out.print(text);  // 实时输出
+    }
+
+    @Override
+    public void onThinking(String runId, String thought) {
+        System.out.println("思考: " + thought);
+    }
+
+    @Override
+    public void onComplete(String runId, String summary, Map<String, Object> result) {
+        System.out.println("\n完成: " + summary);
+    }
+
+    @Override
+    public void onError(String runId, String error) {
+        System.out.println("错误: " + error);
+    }
+});
 ```
 
 ### 事件监听
@@ -73,7 +123,42 @@ client.addEventListener(new WsEventListener() {
             System.out.println("回复: " + message.get("content"));
         }
     }
+
+    @Override
+    public void onHealthCheck(boolean healthy, Throwable error) {
+        System.out.println("健康检查: " + (healthy ? "正常" : "失败"));
+    }
+
+    @Override
+    public void onReconnected() {
+        System.out.println("已重连");
+    }
 });
+```
+
+### 异常处理
+
+```java
+try {
+    AgentResult result = client.runAgent("你好", "main");
+} catch (OpenClawAgentException e) {
+    System.out.println("错误码: " + e.getCode());      // A001, A002...
+    System.out.println("错误信息: " + e.getMessage());
+} catch (OpenClawConnectionException e) {
+    System.out.println("连接错误: " + e.getCode());    // C001, C002...
+} catch (OpenClawTimeoutException e) {
+    System.out.println("超时: " + e.getTimeoutMs() + "ms");
+}
+```
+
+### Metrics 指标
+
+```java
+ClientMetrics metrics = client.getMetrics();
+System.out.println("总请求数: " + metrics.getTotalRequests());
+System.out.println("成功率: " + metrics.getSuccessRate() + "%");
+System.out.println("平均响应时间: " + metrics.getAverageRequestDurationMs() + "ms");
+System.out.println("队列大小: " + metrics.getCurrentQueueSize());
 ```
 
 ## Spring Boot Starter
@@ -84,7 +169,7 @@ client.addEventListener(new WsEventListener() {
 <dependency>
     <groupId>ai.openclaw</groupId>
     <artifactId>openclaw-java-client</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 </dependency>
 ```
 
@@ -100,6 +185,12 @@ openclaw:
     require-device: false
     max-queue-capacity: 500
     default-result-timeout-ms: 300000
+    auto-reconnect: true
+    max-reconnect-retries: 10
+    health-check-enabled: true
+    health-check-interval-ms: 30000
+    retry-enabled: true
+    max-retry-count: 3
 ```
 
 ### 使用
@@ -133,16 +224,31 @@ public class ChatController {
 | `openclaw.ws.max-queue-capacity` | 500 | 请求队列上限 |
 | `openclaw.ws.default-result-timeout-ms` | 300000 | 结果超时(毫秒) |
 
-### Webhook
+### 重连配置
 
-```yaml
-openclaw:
-  base-url: http://127.0.0.1:18789
-  token: your-token
-  hooks:
-    enabled: true
-    token: webhook-secret
-```
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `openclaw.ws.auto-reconnect` | true | 启用自动重连 |
+| `openclaw.ws.max-reconnect-retries` | 10 | 最大重连次数 |
+| `openclaw.ws.reconnect-initial-delay-ms` | 1000 | 重连初始延迟 |
+| `openclaw.ws.reconnect-max-delay-ms` | 30000 | 重连最大延迟 |
+
+### 健康检查
+
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `openclaw.ws.health-check-enabled` | true | 启用健康检查 |
+| `openclaw.ws.health-check-interval-ms` | 30000 | 检查间隔 |
+| `openclaw.ws.health-check-timeout-ms` | 10000 | 检查超时 |
+
+### 重试配置
+
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `openclaw.ws.retry-enabled` | true | 启用重试 |
+| `openclaw.ws.max-retry-count` | 3 | 最大重试次数 |
+| `openclaw.ws.retry-initial-delay-ms` | 500 | 重试初始延迟 |
+| `openclaw.ws.retry-max-delay-ms` | 5000 | 重试最大延迟 |
 
 ## API 参考
 
@@ -158,10 +264,27 @@ client.runAgentWithUid(uid, message, agentId);
 client.runAgentAsync(message);
 client.runAgentAsync(message, agentId);
 
+// 流式
+client.runAgentStream(message, callback);
+client.runAgentStream(message, agentId, callback);
+
+// 会话管理
+client.sessionsHistory(sessionKey, limit);
+client.sessionsList(page, pageSize);
+client.sessionsDelete(sessionKey);
+
+// 工具集成
+client.toolsCatalog(category, keyword, page, pageSize);
+client.toolsInvoke(toolName, arguments);
+client.toolsRegister(toolName, description, schema);
+
 // 状态
 client.isConnected();
 client.health();
 client.status();
+
+// Metrics
+client.getMetrics();
 
 // 事件
 client.addEventListener(listener);
@@ -176,13 +299,23 @@ client.close();
 ```java
 result.getUid();       // 请求 UID
 result.getRunId();     // 运行 ID
-result.getStatus();    // accepted, ok, error
+result.getStatus();    // accepted, ok, error, timeout
 result.getSummary();   // 回复内容
 result.getError();    // 错误信息
 
-result.isOk();        // 是否成功
-result.isError();    // 是否有错
+result.isOk();         // 是否成功
+result.isError();     // 是否有错
+result.isAccepted();  // 是否已接受
 ```
+
+### 异常类
+
+| 异常类 | 错误码前缀 | 说明 |
+|--------|------------|------|
+| `OpenClawConnectionException` | C001-C005 | 连接相关 |
+| `OpenClawRequestException` | R001-R004 | 请求相关 |
+| `OpenClawTimeoutException` | R001, A003 | 超时相关 |
+| `OpenClawAgentException` | A001-A004 | Agent 相关 |
 
 ## 构建
 
