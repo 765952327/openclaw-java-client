@@ -24,10 +24,15 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 | 代理支持 | HTTP/SOCKS 代理 |
 | 消息签名 | HMAC-SHA256 签名验证 |
 | Spring Boot | 自动配置、零 XML 配置 |
+| 多实例 | 支持配置多个 OpenClaw 实例 |
+
+---
 
 ## 快速开始
 
-### 安装
+### 方式一：Spring Boot 自动配置（最简单）
+
+添加依赖即可自动配置：
 
 ```xml
 <dependency>
@@ -37,10 +42,113 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 </dependency>
 ```
 
-### WebSocket 调用
+配置 application.yml：
+
+```yaml
+openclaw:
+  enabled: true
+  default-instance: local
+  
+  instances:
+    local:
+      base-url: http://127.0.0.1:18789
+      token: your-token
+      type: websocket    # http 或 websocket
+      enabled: true
+```
+
+直接注入使用：
 
 ```java
-// 创建客户端
+@RestController
+public class ChatController {
+    
+    @Autowired
+    private OpenClawWsClient wsClient;
+    
+    @GetMapping("/chat")
+    public String chat(@RequestParam String message) {
+        AgentResult result = wsClient.runAgent(message, "main");
+        return result.getSummary();
+    }
+}
+```
+
+---
+
+### 方式二：多实例配置
+
+配置多个 OpenClaw 实例：
+
+```yaml
+openclaw:
+  enabled: true
+  default-instance: prod
+  
+  instances:
+    dev:
+      base-url: http://192.168.1.100:18789
+      token: dev-token
+      type: websocket
+      pool-size: 2
+      enabled: true
+      
+    prod:
+      base-url: https://openclaw.example.com
+      token: prod-token
+      type: websocket
+      pool-size: 5
+      enabled: true
+      
+    # HTTP 类型的实例
+    api:
+      base-url: https://api.example.com
+      token: api-token
+      type: http
+      enabled: true
+```
+
+按名称注入指定的实例：
+
+```java
+@RestController
+public class MultiInstanceController {
+    
+    // 注入 WebSocket 客户端（bean 名称：实例名 + "-ws"）
+    @Qualifier("dev-ws")
+    @Autowired
+    private OpenClawWsClient devClient;
+    
+    @Qualifier("prod-ws")
+    @Autowired
+    private OpenClawWsClient prodClient;
+    
+    // 注入 HTTP 客户端（bean 名称：实例名）
+    @Qualifier("api")
+    @Autowired
+    private OpenClawClient apiClient;
+    
+    // 注入连接池（bean 名称：实例名 + "-pool"）
+    @Qualifier("prod-pool")
+    @Autowired
+    private OpenClawWsClientPool prodPool;
+}
+```
+
+**Bean 命名规则：**
+
+| 实例类型 | Bean 名称 |
+|----------|------------|
+| HTTP 客户端 | `<实例名>` |
+| WebSocket 客户端 | `<实例名>-ws` |
+| 连接池 | `<实例名>-pool` |
+
+---
+
+### 方式三：编程式使用（不使用 Spring）
+
+```java
+// 创建 WebSocket 客户端
 OpenClawWsClient client = new OpenClawWsClient(
     "http://127.0.0.1:18789", 
     "ollama"
@@ -69,6 +177,10 @@ OpenClawWsClient client = OpenClawWsClientBuilder.create()
     .maxRetryCount(3)
     .build();
 ```
+
+---
+
+## 高级用法
 
 ### 异步调用
 
@@ -166,120 +278,6 @@ System.out.println("平均响应时间: " + metrics.getAverageRequestDurationMs(
 System.out.println("队列大小: " + metrics.getCurrentQueueSize());
 ```
 
-## Spring Boot Starter
-
-添加依赖后自动配置：
-
-```xml
-<dependency>
-    <groupId>ai.openclaw</groupId>
-    <artifactId>openclaw-java-client</artifactId>
-    <version>1.0.2</version>
-</dependency>
-```
-
-### 配置
-
-```yaml
-openclaw:
-  ws:
-    enabled: true
-    base-url: http://127.0.0.1:18789
-    token: ollama
-    auto-connect: false
-    require-device: false
-    max-queue-capacity: 500
-    default-request-timeout-ms: 60000
-    default-result-timeout-ms: 300000
-    
-    # 自动重连
-    auto-reconnect: true
-    max-reconnect-retries: 10
-    reconnect-initial-delay-ms: 1000
-    reconnect-max-delay-ms: 30000
-    
-    # 健康检查
-    health-check-enabled: true
-    health-check-interval-ms: 30000
-    health-check-timeout-ms: 10000
-    
-    # 消息重试
-    retry-enabled: true
-    max-retry-count: 3
-    retry-initial-delay-ms: 500
-    retry-max-delay-ms: 5000
-    
-    # 压缩与安全
-    compression-enabled: true
-    ssl-verify-enabled: true
-    
-    # 代理（可选）
-    # proxy-host: localhost
-    # proxy-port: 8080
-```
-
-### 使用
-
-```java
-@RestController
-public class ChatController {
-    
-    @Autowired
-    private OpenClawWsClient wsClient;
-    
-    @GetMapping("/chat")
-    public String chat(@RequestParam String message) {
-        AgentResult result = wsClient.runAgent(message, "main");
-        return result.getSummary();
-    }
-}
-```
-
-### 事件监听器
-
-```java
-@Component
-public class OpenClawEventListener implements WsEventListener {
-    
-    @Override
-    public void onHealthCheck(boolean healthy, Throwable error) {
-        System.out.println("Health check: " + (healthy ? "OK" : "FAILED"));
-    }
-    
-    @Override
-    public void onReconnected() {
-        System.out.println("Reconnected!");
-    }
-    
-    @Override
-    public void onAgentComplete(String runId, String summary, Map<String, Object> result) {
-        System.out.println("Agent " + runId + " completed: " + summary);
-    }
-}
-```
-
-### 使用 Metrics
-
-```java
-@RestController
-public class MetricsController {
-    
-    @Autowired
-    private OpenClawWsClient wsClient;
-    
-    @GetMapping("/metrics")
-    public Map<String, Object> metrics() {
-        ClientMetrics m = wsClient.getMetrics();
-        Map<String, Object> result = new HashMap<>();
-        result.put("totalRequests", m.getTotalRequests());
-        result.put("successRate", m.getSuccessRate() + "%");
-        result.put("avgDuration", m.getAverageRequestDurationMs() + "ms");
-        result.put("queueSize", m.getCurrentQueueSize());
-        return result;
-    }
-}
-```
-
 ### 使用缓存
 
 ```java
@@ -305,54 +303,91 @@ public class AgentService {
 }
 ```
 
+### 事件监听器（Spring）
+
+```java
+@Component
+public class OpenClawEventListener implements WsEventListener {
+    
+    @Override
+    public void onHealthCheck(boolean healthy, Throwable error) {
+        System.out.println("Health check: " + (healthy ? "OK" : "FAILED"));
+    }
+    
+    @Override
+    public void onReconnected() {
+        System.out.println("Reconnected!");
+    }
+    
+    @Override
+    public void onAgentComplete(String runId, String summary, Map<String, Object> result) {
+        System.out.println("Agent " + runId + " completed: " + summary);
+    }
+}
+```
+
+---
+
 ## 配置属性
 
-### WebSocket
+### 基础配置
 
 | 属性 | 默认值 | 说明 |
 |------|--------|------|
-| `openclaw.ws.enabled` | true | 启用客户端 |
-| `openclaw.ws.base-url` | http://127.0.0.1:18789 | Gateway 地址 |
-| `openclaw.ws.token` | - | 认证令牌 |
-| `openclaw.ws.require-device` | false | 需要设备认证 |
-| `openclaw.ws.auto-connect` | false | 启动自动连接 |
-| `openclaw.ws.max-queue-capacity` | 500 | 请求队列上限 |
-| `openclaw.ws.default-result-timeout-ms` | 300000 | 结果超时(毫秒) |
+| `openclaw.enabled` | true | 启用客户端 |
+| `openclaw.default-instance` | - | 默认实例名称 |
 
-### 重连配置
+### 实例配置（instances）
 
 | 属性 | 默认值 | 说明 |
 |------|--------|------|
-| `openclaw.ws.auto-reconnect` | true | 启用自动重连 |
-| `openclaw.ws.max-reconnect-retries` | 10 | 最大重连次数 |
-| `openclaw.ws.reconnect-initial-delay-ms` | 1000 | 重连初始延迟 |
-| `openclaw.ws.reconnect-max-delay-ms` | 30000 | 重连最大延迟 |
+| `instances.<name>.base-url` | - | Gateway 地址 |
+| `instances.<name>.token` | - | 认证令牌 |
+| `instances.<name>.type` | http | 实例类型（http/websocket） |
+| `instances.<name>.pool-size` | 1 | 连接池大小 |
+| `instances.<name>.enabled` | true | 是否启用 |
 
-### 健康检查
+### WebSocket 高级配置
 
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `openclaw.ws.health-check-enabled` | true | 启用健康检查 |
-| `openclaw.ws.health-check-interval-ms` | 30000 | 检查间隔 |
-| `openclaw.ws.health-check-timeout-ms` | 10000 | 检查超时 |
+```yaml
+openclaw:
+  instances:
+    prod:
+      base-url: https://openclaw.example.com
+      token: your-token
+      type: websocket
+      ws-properties:
+        max-queue-capacity: 500
+        default-request-timeout-ms: 60000
+        default-result-timeout-ms: 300000
+        
+        # 自动重连
+        auto-reconnect: true
+        max-reconnect-retries: 10
+        reconnect-initial-delay-ms: 1000
+        reconnect-max-delay-ms: 30000
+        
+        # 健康检查
+        health-check-enabled: true
+        health-check-interval-ms: 30000
+        health-check-timeout-ms: 10000
+        
+        # 消息重试
+        retry-enabled: true
+        max-retry-count: 3
+        retry-initial-delay-ms: 500
+        retry-max-delay-ms: 5000
+        
+        # 压缩与安全
+        compression-enabled: true
+        ssl-verify-enabled: true
+        
+        # 代理（可选）
+        # proxy-host: localhost
+        # proxy-port: 8080
+```
 
-### 重试配置
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `openclaw.ws.retry-enabled` | true | 启用重试 |
-| `openclaw.ws.max-retry-count` | 3 | 最大重试次数 |
-| `openclaw.ws.retry-initial-delay-ms` | 500 | 重试初始延迟 |
-| `openclaw.ws.retry-max-delay-ms` | 5000 | 重试最大延迟 |
-
-### 压缩与安全配置
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `openclaw.ws.compression-enabled` | true | 启用 gzip 压缩 |
-| `openclaw.ws.ssl-verify-enabled` | true | 启用 SSL 证书验证 |
-| `openclaw.ws.proxy-host` | - | 代理主机地址 |
-| `openclaw.ws.proxy-port` | - | 代理端口 |
+---
 
 ## API 参考
 
@@ -421,7 +456,7 @@ result.getUid();       // 请求 UID
 result.getRunId();     // 运行 ID
 result.getStatus();    // accepted, ok, error, timeout
 result.getSummary();   // 回复内容
-result.getError();    // 错误信息
+result.getError();     // 错误信息
 
 result.isOk();         // 是否成功
 result.isError();     // 是否有错
@@ -436,6 +471,8 @@ result.isAccepted();  // 是否已接受
 | `OpenClawRequestException` | R001-R004 | 请求相关 |
 | `OpenClawTimeoutException` | R001, A003 | 超时相关 |
 | `OpenClawAgentException` | A001-A004 | Agent 相关 |
+
+---
 
 ## 构建
 
