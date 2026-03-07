@@ -1,5 +1,11 @@
 package ai.openclaw.client.ws;
 
+import ai.openclaw.client.exception.OpenClawAgentException;
+import ai.openclaw.client.exception.OpenClawConnectionException;
+import ai.openclaw.client.exception.OpenClawErrorCode;
+import ai.openclaw.client.exception.OpenClawException;
+import ai.openclaw.client.exception.OpenClawRequestException;
+import ai.openclaw.client.exception.OpenClawTimeoutException;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
@@ -765,7 +771,7 @@ public class OpenClawWsClient {
             boolean sent = webSocket.send(json);
             logger.debug("Sent request: {}, success: {}", request.getMethod(), sent);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to send request", e);
+            throw new OpenClawRequestException(OpenClawErrorCode.WEBSOCKET_SEND_FAILED, "Failed to send request", e);
         }
     }
 
@@ -783,7 +789,7 @@ public class OpenClawWsClient {
             }
             
             if (!connected) {
-                throw new IOException("WebSocket disconnected");
+                throw new OpenClawConnectionException(OpenClawErrorCode.WEBSOCKET_NOT_CONNECTED, "WebSocket disconnected while waiting for response");
             }
             
             try {
@@ -794,7 +800,7 @@ public class OpenClawWsClient {
             }
         }
         
-        throw new TimeoutException("Request timeout: " + requestId);
+        throw new OpenClawTimeoutException(OpenClawErrorCode.REQUEST_TIMEOUT, "Request timeout: " + requestId, timeoutMs);
     }
 
     private AgentResult waitForAgentResult(String runId, long timeoutMs) throws TimeoutException, IOException {
@@ -865,7 +871,7 @@ public class OpenClawWsClient {
             }
             
             if (!connected) {
-                throw new IOException("WebSocket disconnected");
+                throw new OpenClawConnectionException(OpenClawErrorCode.WEBSOCKET_NOT_CONNECTED, "WebSocket disconnected while waiting for agent result");
             }
             
             try {
@@ -933,15 +939,23 @@ public class OpenClawWsClient {
             }
         }
         
-        throw new IOException("Request timeout: " + method);
+        throw new OpenClawTimeoutException(OpenClawErrorCode.REQUEST_TIMEOUT, "Request timeout: " + method, timeoutMs);
     }
 
-    public WsResponse health() throws IOException {
-        return sendAndWait("health", null, 10000);
+    public WsResponse health() throws OpenClawException {
+        try {
+            return sendAndWait("health", null, 10000);
+        } catch (IOException e) {
+            throw new OpenClawConnectionException(OpenClawErrorCode.CONNECTION_FAILED, "Health check failed", e);
+        }
     }
 
-    public WsResponse status() throws IOException {
-        return sendAndWait("status", null, 10000);
+    public WsResponse status() throws OpenClawException {
+        try {
+            return sendAndWait("status", null, 10000);
+        } catch (IOException e) {
+            throw new OpenClawConnectionException(OpenClawErrorCode.CONNECTION_FAILED, "Status check failed", e);
+        }
     }
 
     /**
@@ -1017,37 +1031,37 @@ public class OpenClawWsClient {
      * @return Agent 执行结果
      * @throws IOException 执行失败时抛出
      */
-    public AgentResult runAgentWithUid(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
+    public AgentResult runAgentWithUid(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws OpenClawException {
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
         try {
             return runAgentAsync(uid, message, agentId, deliver, null, null).get(effectiveTimeout, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("Interrupted", e);
+            throw new OpenClawAgentException(OpenClawErrorCode.AGENT_EXECUTION_FAILED, "Agent execution interrupted", e);
         } catch (ExecutionException e) {
-            if (e.getCause() instanceof IOException) {
-                throw (IOException) e.getCause();
+            if (e.getCause() instanceof OpenClawException) {
+                throw (OpenClawException) e.getCause();
             }
-            throw new IOException(e.getCause());
-        } catch (TimeoutException e) {
-            throw new IOException("Agent execution timeout", e);
+            throw new OpenClawAgentException(OpenClawErrorCode.AGENT_EXECUTION_FAILED, e.getCause());
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new OpenClawTimeoutException(OpenClawErrorCode.AGENT_TIMEOUT, "Agent execution timeout after " + effectiveTimeout + "ms", effectiveTimeout);
         }
     }
 
-    private AgentResult runAgent(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
+    private AgentResult runAgent(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws OpenClawException {
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
         try {
             return runAgentAsync(uid, message, agentId, deliver, null, null).get(effectiveTimeout, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("Interrupted", e);
+            throw new OpenClawAgentException(OpenClawErrorCode.AGENT_EXECUTION_FAILED, "Agent execution interrupted", e);
         } catch (ExecutionException e) {
-            if (e.getCause() instanceof IOException) {
-                throw (IOException) e.getCause();
+            if (e.getCause() instanceof OpenClawException) {
+                throw (OpenClawException) e.getCause();
             }
-            throw new IOException(e.getCause());
-        } catch (TimeoutException e) {
-            throw new IOException("Agent execution timeout", e);
+            throw new OpenClawAgentException(OpenClawErrorCode.AGENT_EXECUTION_FAILED, e.getCause());
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new OpenClawTimeoutException(OpenClawErrorCode.AGENT_TIMEOUT, "Agent execution timeout after " + effectiveTimeout + "ms", effectiveTimeout);
         }
     }
 
