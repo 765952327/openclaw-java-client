@@ -23,6 +23,12 @@ public class OpenClawClientManager {
         initializeClients();
     }
 
+    public OpenClawClientManager(MultiOpenClawProperties multiProperties, Map<String, OpenClawClient> clients) {
+        this.multiProperties = multiProperties;
+        this.clients.putAll(clients);
+        this.defaultInstance = multiProperties.getDefaultInstance();
+    }
+
     private void initializeClients() {
         if (multiProperties.getInstances() != null) {
             for (String name : multiProperties.getInstances().keySet()) {

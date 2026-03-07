@@ -42,6 +42,9 @@ public class OpenClawProperties {
     @JsonProperty("read-timeout-ms")
     private int readTimeoutMs = 30000;
 
+    @JsonProperty("enabled")
+    private boolean enabled = true;
+
     public String getBaseUrl() {
         return baseUrl;
     }
@@ -112,6 +115,14 @@ public class OpenClawProperties {
 
     public void setReadTimeoutMs(int readTimeoutMs) {
         this.readTimeoutMs = readTimeoutMs;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 
     public void addScheduledTask(String name, ScheduledTaskConfig config) {
