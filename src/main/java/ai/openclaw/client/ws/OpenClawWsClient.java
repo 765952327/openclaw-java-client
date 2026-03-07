@@ -64,6 +64,10 @@ public class OpenClawWsClient {
     private static final long DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;
     /** 默认最大重连次数 */
     private static final int DEFAULT_RECONNECT_MAX_RETRIES = 10;
+    /** 默认健康检查间隔（毫秒） */
+    private static final long DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30000;
+    /** 默认健康检查超时（毫秒） */
+    private static final long DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 10000;
 
     // ==================== 基础配置 ====================
     
@@ -132,6 +136,21 @@ public class OpenClawWsClient {
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
     /** 当前重连次数 */
     private volatile int currentReconnectAttempt = 0;
+    
+    // ==================== 健康检查配置 ====================
+    
+    /** 是否启用健康检查 */
+    private final boolean healthCheckEnabled;
+    /** 健康检查间隔（毫秒） */
+    private final long healthCheckIntervalMs;
+    /** 健康检查超时（毫秒） */
+    private final long healthCheckTimeoutMs;
+    /** 健康检查线程 */
+    private volatile Thread healthCheckThread;
+    /** 上次健康检查时间 */
+    private volatile long lastHealthCheckTime = 0;
+    /** 上次健康检查结果 */
+    private volatile boolean lastHealthCheckResult = false;
 
     /**
      * 构造函数（使用默认配置）
@@ -141,7 +160,8 @@ public class OpenClawWsClient {
      */
     public OpenClawWsClient(String baseUrl, String token) {
         this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS,
-            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS);
+            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
+            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
     }
 
     /**
@@ -156,7 +176,8 @@ public class OpenClawWsClient {
     public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs) {
         this(baseUrl, token, maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
-            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS);
+            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
+            true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
     }
 
     /**
@@ -171,10 +192,14 @@ public class OpenClawWsClient {
      * @param maxReconnectRetries        最大重连次数
      * @param reconnectInitialDelayMs    重连初始延迟（毫秒）
      * @param reconnectMaxDelayMs        重连最大延迟（毫秒）
+     * @param healthCheckEnabled        是否启用健康检查
+     * @param healthCheckIntervalMs      健康检查间隔（毫秒）
+     * @param healthCheckTimeoutMs      健康检查超时（毫秒）
      */
     public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs,
-            boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs) {
+            boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs,
+            boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
@@ -186,6 +211,9 @@ public class OpenClawWsClient {
         this.maxReconnectRetries = maxReconnectRetries;
         this.reconnectInitialDelayMs = reconnectInitialDelayMs;
         this.reconnectMaxDelayMs = reconnectMaxDelayMs;
+        this.healthCheckEnabled = healthCheckEnabled;
+        this.healthCheckIntervalMs = healthCheckIntervalMs;
+        this.healthCheckTimeoutMs = healthCheckTimeoutMs;
         
         this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
         this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -273,9 +301,110 @@ public class OpenClawWsClient {
         
         if (connected) {
             startConsumer();
+            startHealthCheck();
         }
         
         return connected;
+    }
+    
+    /**
+     * 启动健康检查线程
+     */
+    private void startHealthCheck() {
+        if (!healthCheckEnabled) {
+            return;
+        }
+        
+        if (healthCheckThread != null && healthCheckThread.isAlive()) {
+            return;
+        }
+        
+        healthCheckThread = new Thread(this::healthCheckLoop, "openclaw-ws-health-check");
+        healthCheckThread.setDaemon(true);
+        healthCheckThread.start();
+        logger.info("Health check thread started, interval: {}ms", healthCheckIntervalMs);
+    }
+    
+    /**
+     * 健康检查线程主循环
+     */
+    private void healthCheckLoop() {
+        logger.info("Health check loop started");
+        
+        while (running.get() && connected) {
+            try {
+                Thread.sleep(healthCheckIntervalMs);
+                
+                if (!running.get() || !connected) {
+                    break;
+                }
+                
+                performHealthCheck();
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                logger.error("Health check error: {}", e.getMessage());
+            }
+        }
+        
+        logger.info("Health check loop stopped");
+    }
+    
+    /**
+     * 执行健康检查
+     */
+    private void performHealthCheck() {
+        try {
+            WsResponse response = health();
+            boolean healthy = response != null && Boolean.TRUE.equals(response.getOk());
+            
+            lastHealthCheckTime = System.currentTimeMillis();
+            lastHealthCheckResult = healthy;
+            
+            if (healthy) {
+                logger.debug("Health check passed");
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onHealthCheck(true, null);
+                    } catch (Exception e) {
+                        logger.error("Health check listener error: {}", e.getMessage());
+                    }
+                }
+            } else {
+                logger.warn("Health check failed: {}", response);
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onHealthCheck(false, new IOException("Health check failed"));
+                    } catch (Exception e) {
+                        logger.error("Health check listener error: {}", e.getMessage());
+                    }
+                }
+                
+                if (autoReconnect && !reconnecting.get()) {
+                    logger.warn("Health check failed, triggering reconnection...");
+                    handleDisconnection(1001, "Health check failed");
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("Health check exception: {}", e.getMessage());
+            lastHealthCheckResult = false;
+            
+            for (WsEventListener listener : eventListeners) {
+                try {
+                    listener.onHealthCheck(false, e);
+                } catch (Exception ex) {
+                    logger.error("Health check listener error: {}", ex.getMessage());
+                }
+            }
+            
+            if (autoReconnect && !reconnecting.get()) {
+                logger.warn("Health check exception, triggering reconnection...");
+                handleDisconnection(1001, "Health check exception: " + e.getMessage());
+            }
+        }
     }
 
     private void startConsumer() {
@@ -1117,6 +1246,15 @@ public class OpenClawWsClient {
         
         requestQueue.clear();
         
+        if (healthCheckThread != null && healthCheckThread.isAlive()) {
+            healthCheckThread.interrupt();
+            try {
+                healthCheckThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        
         if (webSocket != null) {
             try {
                 webSocket.close(1000, "Client closed");
@@ -1174,5 +1312,59 @@ public class OpenClawWsClient {
      */
     public String getDeviceToken() {
         return deviceToken;
+    }
+
+    /**
+     * 检查是否启用健康检查
+     * 
+     * @return 是否启用健康检查
+     */
+    public boolean isHealthCheckEnabled() {
+        return healthCheckEnabled;
+    }
+
+    /**
+     * 获取健康检查间隔
+     * 
+     * @return 健康检查间隔（毫秒）
+     */
+    public long getHealthCheckIntervalMs() {
+        return healthCheckIntervalMs;
+    }
+
+    /**
+     * 获取健康检查超时
+     * 
+     * @return 健康检查超时（毫秒）
+     */
+    public long getHealthCheckTimeoutMs() {
+        return healthCheckTimeoutMs;
+    }
+
+    /**
+     * 获取上次健康检查时间
+     * 
+     * @return 上次健康检查时间戳（毫秒），0 表示未检查过
+     */
+    public long getLastHealthCheckTime() {
+        return lastHealthCheckTime;
+    }
+
+    /**
+     * 获取上次健康检查结果
+     * 
+     * @return 上次健康检查结果，false 表示未检查过或检查失败
+     */
+    public boolean getLastHealthCheckResult() {
+        return lastHealthCheckResult;
+    }
+
+    /**
+     * 检查健康检查线程是否在运行
+     * 
+     * @return 健康检查线程是否在运行
+     */
+    public boolean isHealthCheckRunning() {
+        return healthCheckThread != null && healthCheckThread.isAlive();
     }
 }

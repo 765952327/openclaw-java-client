@@ -196,7 +196,8 @@ public class WsClientIntegrationTest {
         OpenClawWsClient customClient = new OpenClawWsClient(
             "http://127.0.0.1:18789", "ollama",
             500, 30000, 120000,
-            true, 5, 2000, 10000
+            true, 5, 2000, 10000,
+            false, 30000, 10000
         );
         customClient.setRequireDevice(false);
         
@@ -438,5 +439,115 @@ public class WsClientIntegrationTest {
         assertTrue(result.isOk());
         assertFalse(result.isError());
         assertFalse(result.isAccepted());
+    }
+
+    @Test
+    public void testHealthCheckConfiguration() throws IOException {
+        System.out.println("\n=== Testing Health Check Configuration ===");
+        
+        OpenClawWsClient healthCheckClient = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            500, 30000, 120000,
+            true, 5, 2000, 10000,
+            true, 5000, 3000
+        );
+        healthCheckClient.setRequireDevice(false);
+        
+        System.out.println("Health check enabled: " + healthCheckClient.isHealthCheckEnabled());
+        System.out.println("Health check interval: " + healthCheckClient.getHealthCheckIntervalMs() + "ms");
+        System.out.println("Health check timeout: " + healthCheckClient.getHealthCheckTimeoutMs() + "ms");
+        
+        assertTrue(healthCheckClient.isHealthCheckEnabled());
+        assertEquals(5000, healthCheckClient.getHealthCheckIntervalMs());
+        assertEquals(3000, healthCheckClient.getHealthCheckTimeoutMs());
+        
+        healthCheckClient.close();
+    }
+
+    @Test
+    public void testHealthCheckDisabledConfiguration() throws IOException {
+        System.out.println("\n=== Testing Health Check Disabled ===");
+        
+        OpenClawWsClient disabledClient = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            500, 30000, 120000,
+            true, 5, 2000, 10000,
+            false, 5000, 3000
+        );
+        disabledClient.setRequireDevice(false);
+        
+        System.out.println("Health check enabled: " + disabledClient.isHealthCheckEnabled());
+        
+        assertFalse(disabledClient.isHealthCheckEnabled());
+        
+        disabledClient.close();
+    }
+
+    @Test
+    public void testHealthCheckGetters() throws IOException, InterruptedException {
+        System.out.println("\n=== Testing Health Check Getters ===");
+        
+        OpenClawWsClient client = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            500, 30000, 120000,
+            true, 5, 2000, 10000,
+            true, 10000, 5000
+        );
+        client.setRequireDevice(false);
+        
+        System.out.println("Initial last health check time: " + client.getLastHealthCheckTime());
+        System.out.println("Initial last health check result: " + client.getLastHealthCheckResult());
+        System.out.println("Health check running: " + client.isHealthCheckRunning());
+        
+        assertEquals(0, client.getLastHealthCheckTime());
+        assertFalse(client.getLastHealthCheckResult());
+        
+        client.connect();
+        
+        Thread.sleep(15000);
+        
+        System.out.println("After connect - last health check time: " + client.getLastHealthCheckTime());
+        System.out.println("After connect - last health check result: " + client.getLastHealthCheckResult());
+        System.out.println("After connect - health check running: " + client.isHealthCheckRunning());
+        
+        assertTrue(client.getLastHealthCheckTime() > 0);
+        assertTrue(client.isHealthCheckRunning());
+        
+        client.close();
+    }
+
+    @Test
+    public void testHealthCheckListener() throws IOException, InterruptedException {
+        System.out.println("\n=== Testing Health Check Listener ===");
+        
+        CountDownLatch healthCheckLatch = new CountDownLatch(2);
+        AtomicBoolean healthyResult = new AtomicBoolean(false);
+        
+        OpenClawWsClient healthCheckClient = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            500, 30000, 120000,
+            true, 5, 2000, 10000,
+            true, 5000, 3000
+        );
+        healthCheckClient.setRequireDevice(false);
+        
+        healthCheckClient.addEventListener(new WsEventListener() {
+            @Override
+            public void onHealthCheck(boolean healthy, Throwable error) {
+                System.out.println("Health check result - healthy: " + healthy + ", error: " + (error != null ? error.getMessage() : "none"));
+                healthyResult.set(healthy);
+                healthCheckLatch.countDown();
+            }
+        });
+        
+        healthCheckClient.connect();
+        
+        boolean received = healthCheckLatch.await(20, TimeUnit.SECONDS);
+        System.out.println("Received health check events: " + (2 - healthCheckLatch.getCount()));
+        System.out.println("Final healthy result: " + healthyResult.get());
+        
+        assertTrue("Should receive health check events", received);
+        
+        healthCheckClient.close();
     }
 }

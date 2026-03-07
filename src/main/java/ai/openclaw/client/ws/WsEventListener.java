@@ -30,4 +30,13 @@ public interface WsEventListener {
 
     default void onReconnectFailed(Throwable t) {
     }
+
+    /**
+     * 健康检查结果回调
+     * 
+     * @param healthy 是否健康
+     * @param error   错误信息（如果检查失败）
+     */
+    default void onHealthCheck(boolean healthy, Throwable error) {
+    }
 }
