@@ -189,13 +189,33 @@ openclaw:
     auto-connect: false
     require-device: false
     max-queue-capacity: 500
+    default-request-timeout-ms: 60000
     default-result-timeout-ms: 300000
+    
+    # 自动重连
     auto-reconnect: true
     max-reconnect-retries: 10
+    reconnect-initial-delay-ms: 1000
+    reconnect-max-delay-ms: 30000
+    
+    # 健康检查
     health-check-enabled: true
     health-check-interval-ms: 30000
+    health-check-timeout-ms: 10000
+    
+    # 消息重试
     retry-enabled: true
     max-retry-count: 3
+    retry-initial-delay-ms: 500
+    retry-max-delay-ms: 5000
+    
+    # 压缩与安全
+    compression-enabled: true
+    ssl-verify-enabled: true
+    
+    # 代理（可选）
+    # proxy-host: localhost
+    # proxy-port: 8080
 ```
 
 ### 使用
@@ -211,6 +231,76 @@ public class ChatController {
     public String chat(@RequestParam String message) {
         AgentResult result = wsClient.runAgent(message, "main");
         return result.getSummary();
+    }
+}
+```
+
+### 事件监听器
+
+```java
+@Component
+public class OpenClawEventListener implements WsEventListener {
+    
+    @Override
+    public void onHealthCheck(boolean healthy, Throwable error) {
+        System.out.println("Health check: " + (healthy ? "OK" : "FAILED"));
+    }
+    
+    @Override
+    public void onReconnected() {
+        System.out.println("Reconnected!");
+    }
+    
+    @Override
+    public void onAgentComplete(String runId, String summary, Map<String, Object> result) {
+        System.out.println("Agent " + runId + " completed: " + summary);
+    }
+}
+```
+
+### 使用 Metrics
+
+```java
+@RestController
+public class MetricsController {
+    
+    @Autowired
+    private OpenClawWsClient wsClient;
+    
+    @GetMapping("/metrics")
+    public Map<String, Object> metrics() {
+        ClientMetrics m = wsClient.getMetrics();
+        Map<String, Object> result = new HashMap<>();
+        result.put("totalRequests", m.getTotalRequests());
+        result.put("successRate", m.getSuccessRate() + "%");
+        result.put("avgDuration", m.getAverageRequestDurationMs() + "ms");
+        result.put("queueSize", m.getCurrentQueueSize());
+        return result;
+    }
+}
+```
+
+### 使用缓存
+
+```java
+@Service
+public class AgentService {
+    
+    @Autowired
+    private OpenClawWsClient wsClient;
+    
+    public List<Agent> getAgents() {
+        // 尝试从缓存获取
+        List<Agent> cached = wsClient.getCache().get("agents", List.class);
+        if (cached != null) {
+            return cached;
+        }
+        
+        // 从服务器获取并缓存
+        WsResponse response = wsClient.toolsCatalog(null, null, 1, 100);
+        List<Agent> agents = parseAgents(response);
+        wsClient.getCache().put("agents", agents, 300000); // 缓存5分钟
+        return agents;
     }
 }
 ```
@@ -254,6 +344,15 @@ public class ChatController {
 | `openclaw.ws.max-retry-count` | 3 | 最大重试次数 |
 | `openclaw.ws.retry-initial-delay-ms` | 500 | 重试初始延迟 |
 | `openclaw.ws.retry-max-delay-ms` | 5000 | 重试最大延迟 |
+
+### 压缩与安全配置
+
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `openclaw.ws.compression-enabled` | true | 启用 gzip 压缩 |
+| `openclaw.ws.ssl-verify-enabled` | true | 启用 SSL 证书验证 |
+| `openclaw.ws.proxy-host` | - | 代理主机地址 |
+| `openclaw.ws.proxy-port` | - | 代理端口 |
 
 ## API 参考
 
