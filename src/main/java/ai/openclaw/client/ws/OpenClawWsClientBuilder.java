@@ -18,6 +18,7 @@ public class OpenClawWsClientBuilder {
     private int maxRetryCount = 3;
     private long retryInitialDelayMs = 500;
     private long retryMaxDelayMs = 5000;
+    private boolean compressionEnabled = true;
 
     public OpenClawWsClientBuilder baseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
@@ -99,13 +100,19 @@ public class OpenClawWsClientBuilder {
         return this;
     }
 
+    public OpenClawWsClientBuilder compressionEnabled(boolean enabled) {
+        this.compressionEnabled = enabled;
+        return this;
+    }
+
     public OpenClawWsClient build() {
         return new OpenClawWsClient(
             baseUrl, token,
             maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
             autoReconnect, maxReconnectRetries, reconnectInitialDelayMs, reconnectMaxDelayMs,
             healthCheckEnabled, healthCheckIntervalMs, healthCheckTimeoutMs,
-            retryEnabled, maxRetryCount, retryInitialDelayMs, retryMaxDelayMs
+            retryEnabled, maxRetryCount, retryInitialDelayMs, retryMaxDelayMs,
+            compressionEnabled
         );
     }
 

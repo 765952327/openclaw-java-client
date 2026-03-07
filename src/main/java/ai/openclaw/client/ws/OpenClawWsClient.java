@@ -80,6 +80,8 @@ public class OpenClawWsClient {
     private static final long DEFAULT_RETRY_INITIAL_DELAY_MS = 500;
     /** 默认重试最大延迟（毫秒） */
     private static final long DEFAULT_RETRY_MAX_DELAY_MS = 5000;
+    /** 默认启用压缩 */
+    private static final boolean DEFAULT_COMPRESSION_ENABLED = true;
 
     // ==================== 基础配置 ====================
     
@@ -174,6 +176,11 @@ public class OpenClawWsClient {
     private final long retryInitialDelayMs;
     /** 重试最大延迟（毫秒） */
     private final long retryMaxDelayMs;
+    
+    // ==================== 压缩配置 ====================
+    
+    /** 是否启用 gzip 压缩 */
+    private final boolean compressionEnabled;
 
     /**
      * 构造函数（使用默认配置）
@@ -185,7 +192,8 @@ public class OpenClawWsClient {
         this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS,
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
             true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
-            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS);
+            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS,
+            DEFAULT_COMPRESSION_ENABLED);
     }
 
     /**
@@ -202,7 +210,8 @@ public class OpenClawWsClient {
         this(baseUrl, token, maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
             true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS,
             true, DEFAULT_HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
-            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS);
+            true, DEFAULT_MAX_RETRY_COUNT, DEFAULT_RETRY_INITIAL_DELAY_MS, DEFAULT_RETRY_MAX_DELAY_MS,
+            DEFAULT_COMPRESSION_ENABLED);
     }
 
     /**
@@ -224,12 +233,14 @@ public class OpenClawWsClient {
      * @param maxRetryCount             最大重试次数
      * @param retryInitialDelayMs       重试初始延迟（毫秒）
      * @param retryMaxDelayMs           重试最大延迟（毫秒）
+     * @param compressionEnabled        是否启用 gzip 压缩
      */
     public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs,
             boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs,
             boolean healthCheckEnabled, long healthCheckIntervalMs, long healthCheckTimeoutMs,
-            boolean retryEnabled, int maxRetryCount, long retryInitialDelayMs, long retryMaxDelayMs) {
+            boolean retryEnabled, int maxRetryCount, long retryInitialDelayMs, long retryMaxDelayMs,
+            boolean compressionEnabled) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
@@ -248,6 +259,7 @@ public class OpenClawWsClient {
         this.maxRetryCount = maxRetryCount;
         this.retryInitialDelayMs = retryInitialDelayMs;
         this.retryMaxDelayMs = retryMaxDelayMs;
+        this.compressionEnabled = compressionEnabled;
         
         this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
         this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -256,10 +268,11 @@ public class OpenClawWsClient {
             return t;
         });
         
-        this.httpClient = new OkHttpClient.Builder()
+        OkHttpClient.Builder clientBuilder = new OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
-                .pingInterval(30, TimeUnit.SECONDS)
-                .build();
+                .pingInterval(30, TimeUnit.SECONDS);
+        
+        this.httpClient = clientBuilder.build();
     }
 
     /**
@@ -1667,6 +1680,10 @@ public class OpenClawWsClient {
 
     public long getRetryMaxDelayMs() {
         return retryMaxDelayMs;
+    }
+
+    public boolean isCompressionEnabled() {
+        return compressionEnabled;
     }
 
     private final ClientMetrics metrics = new ClientMetrics();
