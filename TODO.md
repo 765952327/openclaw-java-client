@@ -50,13 +50,13 @@
 ### 可观测性
 
 - [x] **Metrics** - 添加请求延迟、队列大小等指标
-- [ ] **链路追踪** - 支持 OpenTracing/OpenTelemetry
-- [ ] **健康检查端点** - Spring Boot Actuator 集成
+- [x] **链路追踪** - 支持 OpenTelemetry 支持（需额外依赖）
+- [ ] **健康检查端点** - Spring Boot Actuator 集成（需额外依赖）
 
 ### 开发者体验
 
-- [ ] **Spring Boot Admin** - 集成 Spring Boot Admin
-- [ ] **配置刷新** - 支持配置热更新
+- [ ] **Spring Boot Admin** - 集成 Spring Boot Admin（需额外依赖）
+- [ ] **配置刷新** - 支持配置热更新（需额外依赖）
 - [x] **DSL** - 流式 API 构建器
 
 ---
@@ -71,6 +71,6 @@
 
 ## 测试
 
-- [ ] **单元测试** - 补充单元测试覆盖率
-- [ ] **集成测试** - 添加更多集成测试场景
+- [x] **单元测试** - 补充单元测试覆盖率
+- [x] **集成测试** - 添加更多集成测试场景
 - [ ] **性能测试** - 添加 JMH 基准测试
