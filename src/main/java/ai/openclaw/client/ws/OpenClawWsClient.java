@@ -1573,6 +1573,8 @@ public class OpenClawWsClient {
             consumerExecutor.shutdownNow();
         }
         
+        cache.shutdown();
+        
         logger.info("WebSocket client closed");
     }
 
@@ -1687,8 +1689,13 @@ public class OpenClawWsClient {
     }
 
     private final ClientMetrics metrics = new ClientMetrics();
+    private final ClientCache cache = new ClientCache();
 
     public ClientMetrics getMetrics() {
         return metrics;
+    }
+
+    public ClientCache getCache() {
+        return cache;
     }
 }
