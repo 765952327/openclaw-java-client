@@ -21,7 +21,7 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 ```xml
 <dependency>
     <groupId>ai.openclaw</groupId>
-    <artifactId>java-openclaw-client</artifactId>
+    <artifactId>openclaw-java-client</artifactId>
     <version>1.0.1</version>
 </dependency>
 ```
@@ -83,7 +83,7 @@ client.addEventListener(new WsEventListener() {
 ```xml
 <dependency>
     <groupId>ai.openclaw</groupId>
-    <artifactId>java-openclaw-client</artifactId>
+    <artifactId>openclaw-java-client</artifactId>
     <version>1.0.1</version>
 </dependency>
 ```

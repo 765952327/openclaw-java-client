@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>ai.openclaw</groupId>
-    <artifactId>java-openclaw-client</artifactId>
+    <artifactId>openclaw-java-client</artifactId>
     <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>OpenClaw Java Client</name>
-    <description>Java client for OpenClaw webhook automation</description>
+    <description>Java client for OpenClaw (WebSocket + Webhook automation)</description>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
