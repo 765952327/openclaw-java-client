@@ -30,7 +30,22 @@ public class OpenClawWsClientAutoConfiguration {
             properties.getToken(),
             properties.getMaxQueueCapacity(),
             properties.getDefaultRequestTimeoutMs(),
-            properties.getDefaultResultTimeoutMs()
+            properties.getDefaultResultTimeoutMs(),
+            properties.isAutoReconnect(),
+            properties.getMaxReconnectRetries(),
+            properties.getReconnectInitialDelayMs(),
+            properties.getReconnectMaxDelayMs(),
+            properties.isHealthCheckEnabled(),
+            properties.getHealthCheckIntervalMs(),
+            properties.getHealthCheckTimeoutMs(),
+            properties.isRetryEnabled(),
+            properties.getMaxRetryCount(),
+            properties.getRetryInitialDelayMs(),
+            properties.getRetryMaxDelayMs(),
+            properties.isCompressionEnabled(),
+            properties.isSslVerifyEnabled(),
+            properties.getProxyHost(),
+            properties.getProxyPort() != null ? properties.getProxyPort() : 0
         );
         
         client.setRequireDevice(properties.isRequireDevice());
@@ -80,6 +95,40 @@ public class OpenClawWsClientAutoConfiguration {
             @Override
             public void onError(Throwable t) {
                 logger.error("OpenClaw error: {}", t.getMessage(), t);
+            }
+
+            @Override
+            public void onHealthCheck(boolean healthy, Throwable error) {
+                if (healthy) {
+                    logger.debug("Health check passed");
+                } else {
+                    logger.warn("Health check failed: {}", error != null ? error.getMessage() : "unknown");
+                }
+            }
+
+            @Override
+            public void onReconnected() {
+                logger.info("Reconnected to OpenClaw Gateway");
+            }
+
+            @Override
+            public void onReconnectFailed(Throwable t) {
+                logger.error("Reconnection failed: {}", t.getMessage());
+            }
+
+            @Override
+            public void onAgentStart(String runId, Map<String, Object> metadata) {
+                logger.info("Agent started: runId={}", runId);
+            }
+
+            @Override
+            public void onAgentComplete(String runId, String summary, Map<String, Object> result) {
+                logger.info("Agent completed: runId={}, summary={}", runId, summary);
+            }
+
+            @Override
+            public void onAgentError(String runId, String error) {
+                logger.error("Agent error: runId={}, error={}", runId, error);
             }
         };
     }
