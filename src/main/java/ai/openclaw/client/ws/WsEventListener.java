@@ -39,4 +39,22 @@ public interface WsEventListener {
      */
     default void onHealthCheck(boolean healthy, Throwable error) {
     }
+
+    default void onAgentStart(String runId, Map<String, Object> metadata) {
+    }
+
+    default void onAgentOutput(String runId, String text, Map<String, Object> data) {
+    }
+
+    default void onAgentThinking(String runId, String thought) {
+    }
+
+    default void onAgentToken(String runId, String token) {
+    }
+
+    default void onAgentComplete(String runId, String summary, Map<String, Object> result) {
+    }
+
+    default void onAgentError(String runId, String error) {
+    }
 }

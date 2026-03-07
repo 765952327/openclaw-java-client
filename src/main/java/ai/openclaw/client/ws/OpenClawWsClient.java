@@ -743,6 +743,84 @@ public class OpenClawWsClient {
                         logger.error("Chat event listener error: {}", e.getMessage());
                     }
                 }
+                
+                if ("start".equals(state) || "continue".equals(state) || "done".equals(state)) {
+                    handleStreamEvent(runId, state, payload);
+                }
+            }
+        }
+    }
+    
+    private void handleStreamEvent(String runId, String state, Map<String, Object> payload) {
+        Map<String, Object> message = (Map<String, Object>) payload.get("message");
+        
+        if (message != null) {
+            if ("start".equals(state)) {
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onAgentStart(runId, message);
+                    } catch (Exception e) {
+                        logger.error("Agent start listener error: {}", e.getMessage());
+                    }
+                }
+            }
+            
+            Object contentObj = message.get("content");
+            if (contentObj instanceof String) {
+                String text = (String) contentObj;
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onAgentOutput(runId, text, message);
+                    } catch (Exception e) {
+                        logger.error("Agent output listener error: {}", e.getMessage());
+                    }
+                }
+            } else if (contentObj instanceof List) {
+                List<?> contentList = (List<?>) contentObj;
+                for (Object item : contentList) {
+                    if (item instanceof Map) {
+                        Map<?, ?> contentItem = (Map<?, ?>) item;
+                        String type = (String) contentItem.get("type");
+                        if ("text".equals(type)) {
+                            String text = (String) contentItem.get("text");
+                            for (WsEventListener listener : eventListeners) {
+                                try {
+                                    listener.onAgentOutput(runId, text, message);
+                                } catch (Exception e) {
+                                    logger.error("Agent output listener error: {}", e.getMessage());
+                                }
+                            }
+                        } else if ("thinking".equals(type)) {
+                            String thought = (String) contentItem.get("thinking");
+                            for (WsEventListener listener : eventListeners) {
+                                try {
+                                    listener.onAgentThinking(runId, thought);
+                                } catch (Exception e) {
+                                    logger.error("Agent thinking listener error: {}", e.getMessage());
+                                }
+                            }
+                        } else if ("tool".equals(type)) {
+                            for (WsEventListener listener : eventListeners) {
+                                try {
+                                    listener.onAgentOutput(runId, "[tool call]", message);
+                                } catch (Exception e) {
+                                    logger.error("Agent tool listener error: {}", e.getMessage());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if ("done".equals(state)) {
+                String summary = extractTextFromMessage(message);
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onAgentComplete(runId, summary, message);
+                    } catch (Exception e) {
+                        logger.error("Agent complete listener error: {}", e.getMessage());
+                    }
+                }
             }
         }
     }
@@ -1144,6 +1222,71 @@ public class OpenClawWsClient {
         }
         
         return future;
+    }
+
+    /**
+     * 流式执行 Agent（带回调）
+     * 
+     * @param message 消息内容
+     * @param callback 流式回调
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
+    public CompletableFuture<AgentResult> runAgentStream(String message, AgentStreamCallback callback) {
+        return runAgentStream(null, message, null, callback);
+    }
+
+    /**
+     * 流式执行 Agent（带回调）
+     * 
+     * @param message 消息内容
+     * @param agentId Agent ID
+     * @param callback 流式回调
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
+    public CompletableFuture<AgentResult> runAgentStream(String message, String agentId, AgentStreamCallback callback) {
+        return runAgentStream(null, message, agentId, callback);
+    }
+
+    /**
+     * 流式执行 Agent（完整参数）
+     * 
+     * @param uid      自定义 UID
+     * @param message  消息内容
+     * @param agentId  Agent ID
+     * @param callback 流式回调
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
+    public CompletableFuture<AgentResult> runAgentStream(String uid, String message, String agentId, AgentStreamCallback callback) {
+        if (callback != null) {
+            addEventListener(new WsEventListener() {
+                @Override
+                public void onAgentStart(String runId, Map<String, Object> metadata) {
+                    callback.onStart(runId, metadata);
+                }
+
+                @Override
+                public void onAgentOutput(String runId, String text, Map<String, Object> data) {
+                    callback.onOutput(runId, text, data);
+                }
+
+                @Override
+                public void onAgentThinking(String runId, String thought) {
+                    callback.onThinking(runId, thought);
+                }
+
+                @Override
+                public void onAgentComplete(String runId, String summary, Map<String, Object> result) {
+                    callback.onComplete(runId, summary, result);
+                }
+
+                @Override
+                public void onAgentError(String runId, String error) {
+                    callback.onError(runId, error);
+                }
+            });
+        }
+        
+        return runAgentAsync(uid, message, agentId, null, null, null);
     }
     
     /**

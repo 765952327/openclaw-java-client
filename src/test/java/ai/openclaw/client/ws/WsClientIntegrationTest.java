@@ -550,4 +550,52 @@ public class WsClientIntegrationTest {
         
         healthCheckClient.close();
     }
+
+    @Test
+    public void testStreamAgent() throws Exception {
+        System.out.println("\n=== Testing Stream Agent ===");
+        
+        CountDownLatch outputLatch = new CountDownLatch(1);
+        CountDownLatch completeLatch = new CountDownLatch(1);
+        StringBuilder outputBuilder = new StringBuilder();
+        
+        wsClient.connect();
+        
+        wsClient.runAgentStream("Say hello in 3 words", "main", new AgentStreamCallback() {
+            @Override
+            public void onStart(String runId, java.util.Map<String, Object> metadata) {
+                System.out.println("Agent started, runId: " + runId);
+            }
+
+            @Override
+            public void onOutput(String runId, String text, java.util.Map<String, Object> data) {
+                System.out.println("Agent output: " + text);
+                outputBuilder.append(text);
+                outputLatch.countDown();
+            }
+
+            @Override
+            public void onError(String runId, String error) {
+                System.out.println("Agent error: " + error);
+            }
+
+            @Override
+            public void onComplete(String runId, String summary, java.util.Map<String, Object> result) {
+                System.out.println("Agent complete, summary: " + summary);
+                completeLatch.countDown();
+            }
+
+            @Override
+            public void onThinking(String runId, String thought) {
+                System.out.println("Agent thinking: " + thought);
+            }
+        });
+        
+        boolean outputReceived = outputLatch.await(30, TimeUnit.SECONDS);
+        boolean completeReceived = completeLatch.await(60, TimeUnit.SECONDS);
+        
+        System.out.println("Output received: " + outputReceived);
+        System.out.println("Output: " + outputBuilder.toString());
+        System.out.println("Complete received: " + completeReceived);
+    }
 }
