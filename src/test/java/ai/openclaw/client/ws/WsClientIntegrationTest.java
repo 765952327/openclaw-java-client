@@ -5,7 +5,6 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
-
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -99,6 +98,25 @@ public class WsClientIntegrationTest {
         System.out.println("Error: " + result.getError());
         
         assertNotNull(result);
+        assertEquals("ok", result.getStatus());
+    }
+
+    @Test
+    public void testRunAgentWithUid() throws IOException {
+        System.out.println("\n=== Testing Agent with UID ===");
+        
+        wsClient.connect();
+        
+        String uid = "test-user-001";
+        AgentResult result = wsClient.runAgentWithUid(uid, "What is 2+2?", "main");
+        
+        System.out.println("UID: " + result.getUid());
+        System.out.println("RunId: " + result.getRunId());
+        System.out.println("Status: " + result.getStatus());
+        System.out.println("Summary: " + result.getSummary());
+        
+        assertEquals(uid, result.getUid());
+        assertEquals("ok", result.getStatus());
     }
 
     @Test
@@ -125,6 +143,72 @@ public class WsClientIntegrationTest {
         
         assertTrue("Should complete within timeout", waitResult);
         assertTrue("Should complete successfully", completed.get());
+    }
+
+    @Test
+    public void testRunAgentAsyncWithUid() throws Exception {
+        System.out.println("\n=== Testing Async Agent with UID ===");
+        
+        wsClient.connect();
+        
+        String uid = "async-test-002";
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<AgentResult> resultRef = new AtomicReference<>();
+        
+        asyncAgentService.runAgentAsync(uid, "Hello with UID", "main", null, null, null)
+            .thenAccept(result -> {
+                System.out.println("Async result with UID:");
+                System.out.println("  UID: " + result.getUid());
+                System.out.println("  RunId: " + result.getRunId());
+                System.out.println("  Summary: " + result.getSummary());
+                resultRef.set(result);
+                latch.countDown();
+            });
+        
+        latch.await(60, TimeUnit.SECONDS);
+        
+        assertEquals(uid, resultRef.get().getUid());
+    }
+
+    @Test
+    public void testQueueConfiguration() throws IOException {
+        System.out.println("\n=== Testing Queue Configuration ===");
+        
+        int customCapacity = 100;
+        OpenClawWsClient customClient = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            customCapacity, 30000, 120000
+        );
+        customClient.setRequireDevice(false);
+        
+        System.out.println("Max queue capacity: " + customClient.getMaxQueueCapacity());
+        System.out.println("Is queue full: " + customClient.isQueueFull());
+        
+        assertEquals(customCapacity, customClient.getMaxQueueCapacity());
+        
+        customClient.close();
+    }
+
+    @Test
+    public void testReconnectConfiguration() throws IOException {
+        System.out.println("\n=== Testing Reconnect Configuration ===");
+        
+        OpenClawWsClient customClient = new OpenClawWsClient(
+            "http://127.0.0.1:18789", "ollama",
+            500, 30000, 120000,
+            true, 5, 2000, 10000
+        );
+        customClient.setRequireDevice(false);
+        
+        System.out.println("Auto reconnect: " + customClient.isAutoReconnect());
+        System.out.println("Max retries: " + customClient.getMaxReconnectRetries());
+        System.out.println("Current attempt: " + customClient.getCurrentReconnectAttempt());
+        System.out.println("Is reconnecting: " + customClient.isReconnecting());
+        
+        assertTrue(customClient.isAutoReconnect());
+        assertEquals(5, customClient.getMaxReconnectRetries());
+        
+        customClient.close();
     }
 
     @Test
@@ -165,6 +249,86 @@ public class WsClientIntegrationTest {
     }
 
     @Test
+    public void testChatEventListener() throws IOException, InterruptedException {
+        System.out.println("\n=== Testing Chat Event Listener ===");
+        
+        CountDownLatch latch = new CountDownLatch(1);
+        
+        wsClient.addEventListener(new WsEventListener() {
+            @Override
+            public void onChatEvent(String runId, String sessionKey, String state, java.util.Map<String, Object> message) {
+                System.out.println("Chat event - runId: " + runId);
+                System.out.println("  sessionKey: " + sessionKey);
+                System.out.println("  state: " + state);
+                System.out.println("  message: " + message);
+                latch.countDown();
+            }
+        });
+        
+        wsClient.connect();
+        wsClient.runAgent("Hello for chat event test", "main");
+        
+        latch.await(30, TimeUnit.SECONDS);
+        
+        assertEquals("Should receive chat event", 0, latch.getCount());
+    }
+
+    @Test
+    public void testPresenceUpdateListener() throws IOException, InterruptedException {
+        System.out.println("\n=== Testing Presence Update Listener ===");
+        
+        CountDownLatch latch = new CountDownLatch(1);
+        
+        wsClient.addEventListener(new WsEventListener() {
+            @Override
+            public void onPresenceUpdate(java.util.Map<String, Object> presence) {
+                System.out.println("Presence update: " + presence);
+                latch.countDown();
+            }
+        });
+        
+        wsClient.connect();
+        
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        System.out.println("Presence latch count: " + latch.getCount());
+    }
+
+    @Test
+    public void testReconnectListener() throws IOException, InterruptedException {
+        System.out.println("\n=== Testing Reconnect Listener ===");
+        
+        CountDownLatch reconnectLatch = new CountDownLatch(1);
+        CountDownLatch failLatch = new CountDownLatch(1);
+        
+        wsClient.addEventListener(new WsEventListener() {
+            @Override
+            public void onReconnected() {
+                System.out.println("Reconnected successfully!");
+                reconnectLatch.countDown();
+            }
+            
+            @Override
+            public void onReconnectFailed(Throwable t) {
+                System.out.println("Reconnect failed: " + t.getMessage());
+                failLatch.countDown();
+            }
+        });
+        
+        wsClient.connect();
+        
+        System.out.println("Connected, waiting for events...");
+        
+        Thread.sleep(5000);
+        
+        System.out.println("Reconnect test completed");
+    }
+
+    @Test
     public void testSendMessage() throws IOException {
         System.out.println("\n=== Testing Send Message ===");
         
@@ -195,11 +359,84 @@ public class WsClientIntegrationTest {
     }
 
     @Test
-    public void test() throws IOException {
-        OpenClawWsClient client = new OpenClawWsClient("http://127.0.0.1:18789", "ollama");
-        client.connect();
+    public void testMultipleAgents() throws IOException {
+        System.out.println("\n=== Testing Multiple Agents ===");
+        
+        wsClient.connect();
+        
+        System.out.println("Running agent 1...");
+        AgentResult result1 = wsClient.runAgent("Say hello", "main");
+        System.out.println("Result 1: " + result1.getSummary());
+        
+        System.out.println("Running agent 2...");
+        AgentResult result2 = wsClient.runAgent("Say goodbye", "main");
+        System.out.println("Result 2: " + result2.getSummary());
+        
+        System.out.println("Running agent 3...");
+        AgentResult result3 = wsClient.runAgent("What is 3+3?", "main");
+        System.out.println("Result 3: " + result3.getSummary());
+        
+        assertNotNull(result1);
+        assertNotNull(result2);
+        assertNotNull(result3);
+        assertEquals("ok", result1.getStatus());
+        assertEquals("ok", result2.getStatus());
+        assertEquals("ok", result3.getStatus());
+    }
 
-        AgentResult result = client.runAgent("今天天气怎么样", "main");
-        System.out.println(result.getSummary());
+    @Test
+    public void testQueueSize() throws IOException {
+        System.out.println("\n=== Testing Queue Size ===");
+        
+        wsClient.connect();
+        
+        System.out.println("Initial queue size: " + wsClient.getQueueSize());
+        
+        wsClient.runAgent("Test 1", "main");
+        System.out.println("After request queue size: " + wsClient.getQueueSize());
+        
+        assertTrue(wsClient.getQueueSize() >= 0);
+    }
+
+    @Test
+    public void testIsConnected() throws IOException {
+        System.out.println("\n=== Testing isConnected ===");
+        
+        System.out.println("Before connect: " + wsClient.isConnected());
+        
+        wsClient.connect();
+        
+        System.out.println("After connect: " + wsClient.isConnected());
+        
+        assertTrue(wsClient.isConnected());
+        
+        wsClient.close();
+        
+        System.out.println("After close: " + wsClient.isConnected());
+        
+        assertFalse(wsClient.isConnected());
+    }
+
+    @Test
+    public void testAgentResultMethods() throws IOException {
+        System.out.println("\n=== Testing AgentResult Methods ===");
+        
+        wsClient.connect();
+        
+        AgentResult result = wsClient.runAgent("What is 5+5?", "main");
+        
+        System.out.println("getUid(): " + result.getUid());
+        System.out.println("getRunId(): " + result.getRunId());
+        System.out.println("getStatus(): " + result.getStatus());
+        System.out.println("getSummary(): " + result.getSummary());
+        System.out.println("getError(): " + result.getError());
+        
+        System.out.println("isAccepted(): " + result.isAccepted());
+        System.out.println("isOk(): " + result.isOk());
+        System.out.println("isError(): " + result.isError());
+        
+        assertTrue(result.isOk());
+        assertFalse(result.isError());
+        assertFalse(result.isAccepted());
     }
 }

@@ -4,7 +4,8 @@ import java.util.Map;
 
 public interface WsEventListener {
 
-    void onEvent(String event, Map<String, Object> payload);
+    default void onEvent(String event, Map<String, Object> payload) {
+    }
 
     default void onError(Throwable t) {
     }
@@ -22,5 +23,11 @@ public interface WsEventListener {
     }
 
     default void onShutdown(String reason, Integer restartExpectedMs) {
+    }
+
+    default void onReconnected() {
+    }
+
+    default void onReconnectFailed(Throwable t) {
     }
 }

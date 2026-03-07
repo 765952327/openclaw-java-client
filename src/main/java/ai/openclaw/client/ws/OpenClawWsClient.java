@@ -25,44 +25,156 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * OpenClaw WebSocket Client
+ * 
+ * <p>用于连接 OpenClaw Gateway 的 WebSocket 客户端，支持：
+ * <ul>
+ *   <li>实时双向通信</li>
+ *   <li>同步/异步 Agent 执行</li>
+ *   <li>事件监听</li>
+ *   <li>自动重连</li>
+ *   <li>请求队列</li>
+ * </ul>
+ * 
+ * <p>使用示例：
+ * <pre>{@code
+ * OpenClawWsClient client = new OpenClawWsClient("http://127.0.0.1:18789", "token");
+ * client.connect();
+ * AgentResult result = client.runAgent("Hello", "main");
+ * client.close();
+ * }</pre>
+ */
 public class OpenClawWsClient {
 
+    /** Logger */
     private static final Logger logger = LoggerFactory.getLogger(OpenClawWsClient.class);
 
+    // ==================== 默认配置常量 ====================
+    
+    /** 默认请求超时时间（毫秒） */
     private static final long DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+    /** 默认结果超时时间（毫秒） */
     private static final long DEFAULT_RESULT_TIMEOUT_MS = 300000;
+    /** 默认请求队列容量 */
     private static final int DEFAULT_MAX_QUEUE_CAPACITY = 500;
+    /** 默认重连初始延迟（毫秒） */
+    private static final long DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1000;
+    /** 默认重连最大延迟（毫秒） */
+    private static final long DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;
+    /** 默认最大重连次数 */
+    private static final int DEFAULT_RECONNECT_MAX_RETRIES = 10;
 
+    // ==================== 基础配置 ====================
+    
+    /** WebSocket 连接地址 */
     private final String baseUrl;
+    /** Gateway 认证令牌 */
     private final String token;
+    /** JSON 序列化/反序列化工具 */
     private final ObjectMapper objectMapper;
     
+    // ==================== 连接状态 ====================
+    
+    /** OkHttp WebSocket 实例 */
     private WebSocket webSocket;
+    /** OkHttp HTTP 客户端 */
     private OkHttpClient httpClient;
+    /** 是否已连接 */
     private volatile boolean connected = false;
+    /** 是否正在连接中 */
     private volatile boolean connecting = false;
     
+    // ==================== 请求管理 ====================
+    
+    /** 等待响应的请求 Map */
     private final Map<String, WsResponse> pendingRequests = new ConcurrentHashMap<>();
+    /** 事件监听器列表 */
     private final CopyOnWriteArrayList<WsEventListener> eventListeners = new CopyOnWriteArrayList<>();
+    /** 连接完成 latch */
     private CountDownLatch connectLatch;
     
+    // ==================== 协议信息 ====================
+    
+    /** 协议版本 */
     private int protocolVersion;
+    /** 设备令牌 */
     private String deviceToken;
+    /** 是否需要设备认证 */
     private boolean requireDevice = true;
     
+    // ==================== 队列配置 ====================
+    
+    /** 请求队列最大容量 */
     private final int maxQueueCapacity;
+    /** 默认请求超时（毫秒） */
     private final long defaultRequestTimeoutMs;
+    /** 默认结果超时（毫秒） */
     private final long defaultResultTimeoutMs;
+    /** 请求队列 */
     private final BlockingQueue<PendingRequest> requestQueue;
+    /** 消费者线程池 */
     private final ExecutorService consumerExecutor;
+    /** 运行状态标志 */
     private final AtomicBoolean running = new AtomicBoolean(false);
+    
+    // ==================== 重连配置 ====================
+    
+    /** 是否启用自动重连 */
+    private final boolean autoReconnect;
+    /** 最大重连次数 */
+    private final int maxReconnectRetries;
+    /** 重连初始延迟（毫秒） */
+    private final long reconnectInitialDelayMs;
+    /** 重连最大延迟（毫秒） */
+    private final long reconnectMaxDelayMs;
+    /** 是否正在重连 */
+    private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    /** 当前重连次数 */
+    private volatile int currentReconnectAttempt = 0;
 
+    /**
+     * 构造函数（使用默认配置）
+     * 
+     * @param baseUrl Gateway 地址
+     * @param token   Gateway 令牌
+     */
     public OpenClawWsClient(String baseUrl, String token) {
-        this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS);
+        this(baseUrl, token, DEFAULT_MAX_QUEUE_CAPACITY, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_RESULT_TIMEOUT_MS,
+            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS);
     }
 
+    /**
+     * 构造函数（自定义队列和超时配置）
+     * 
+     * @param baseUrl                  Gateway 地址
+     * @param token                    Gateway 令牌
+     * @param maxQueueCapacity         请求队列最大容量
+     * @param defaultRequestTimeoutMs   请求超时（毫秒）
+     * @param defaultResultTimeoutMs    结果超时（毫秒）
+     */
     public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
             long defaultRequestTimeoutMs, long defaultResultTimeoutMs) {
+        this(baseUrl, token, maxQueueCapacity, defaultRequestTimeoutMs, defaultResultTimeoutMs,
+            true, DEFAULT_RECONNECT_MAX_RETRIES, DEFAULT_RECONNECT_INITIAL_DELAY_MS, DEFAULT_RECONNECT_MAX_DELAY_MS);
+    }
+
+    /**
+     * 构造函数（自定义所有配置）
+     * 
+     * @param baseUrl                   Gateway 地址
+     * @param token                     Gateway 令牌
+     * @param maxQueueCapacity          请求队列最大容量
+     * @param defaultRequestTimeoutMs    请求超时（毫秒）
+     * @param defaultResultTimeoutMs     结果超时（毫秒）
+     * @param autoReconnect              是否启用自动重连
+     * @param maxReconnectRetries        最大重连次数
+     * @param reconnectInitialDelayMs    重连初始延迟（毫秒）
+     * @param reconnectMaxDelayMs        重连最大延迟（毫秒）
+     */
+    public OpenClawWsClient(String baseUrl, String token, int maxQueueCapacity, 
+            long defaultRequestTimeoutMs, long defaultResultTimeoutMs,
+            boolean autoReconnect, int maxReconnectRetries, long reconnectInitialDelayMs, long reconnectMaxDelayMs) {
         this.baseUrl = baseUrl.replace("http", "ws") + "/ws";
         this.token = token;
         this.objectMapper = new ObjectMapper();
@@ -70,6 +182,10 @@ public class OpenClawWsClient {
         this.maxQueueCapacity = maxQueueCapacity;
         this.defaultRequestTimeoutMs = defaultRequestTimeoutMs;
         this.defaultResultTimeoutMs = defaultResultTimeoutMs;
+        this.autoReconnect = autoReconnect;
+        this.maxReconnectRetries = maxReconnectRetries;
+        this.reconnectInitialDelayMs = reconnectInitialDelayMs;
+        this.reconnectMaxDelayMs = reconnectMaxDelayMs;
         
         this.requestQueue = new LinkedBlockingQueue<>(maxQueueCapacity);
         this.consumerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -84,6 +200,12 @@ public class OpenClawWsClient {
                 .build();
     }
 
+    /**
+     * 连接到 OpenClaw Gateway
+     * 
+     * @return 连接是否成功
+     * @throws IOException 连接失败时抛出
+     */
     public boolean connect() throws IOException {
         if (connected) {
             return true;
@@ -126,6 +248,7 @@ public class OpenClawWsClient {
                 if (connectLatch != null) {
                     connectLatch.countDown();
                 }
+                handleDisconnection(code, reason);
             }
 
             @Override
@@ -136,6 +259,7 @@ public class OpenClawWsClient {
                 if (connectLatch != null) {
                     connectLatch.countDown();
                 }
+                handleDisconnection(1001, t.getMessage());
             }
         });
 
@@ -190,6 +314,133 @@ public class OpenClawWsClient {
         }
         
         logger.info("Consumer loop stopped");
+    }
+
+    private void handleDisconnection(int code, String reason) {
+        if (!running.get()) {
+            logger.info("Client stopped, not attempting reconnection");
+            return;
+        }
+        
+        if (!autoReconnect) {
+            logger.info("Auto-reconnect disabled, not attempting reconnection");
+            return;
+        }
+        
+        if (reconnecting.getAndSet(true)) {
+            logger.info("Already reconnecting, skipping");
+            return;
+        }
+        
+        try {
+            while (currentReconnectAttempt < maxReconnectRetries && running.get()) {
+                currentReconnectAttempt++;
+                long delay = Math.min(
+                    reconnectInitialDelayMs * (long) Math.pow(2, currentReconnectAttempt - 1),
+                    reconnectMaxDelayMs
+                );
+                
+                logger.info("Attempting reconnection {}/{} after {}ms", 
+                    currentReconnectAttempt, maxReconnectRetries, delay);
+                
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                
+                if (!running.get()) {
+                    break;
+                }
+                
+                try {
+                    connectLatch = new CountDownLatch(1);
+                    
+                    String wsUrl = baseUrl.startsWith("ws") ? baseUrl : baseUrl.replace("http", "ws");
+                    if (!wsUrl.contains("/ws")) {
+                        wsUrl = wsUrl + "/ws";
+                    }
+                    
+                    Request request = new Request.Builder().url(wsUrl).build();
+                    webSocket = httpClient.newWebSocket(request, new WebSocketListener() {
+                        @Override
+                        public void onOpen(WebSocket webSocket, Response response) {
+                            logger.info("Reconnection opened, sending connect request...");
+                            connecting = true;
+                            sendConnect();
+                        }
+
+                        @Override
+                        public void onMessage(WebSocket webSocket, String text) {
+                            handleMessage(text);
+                        }
+
+                        @Override
+                        public void onClosing(WebSocket webSocket, int code, String reason) {
+                            logger.info("Reconnection closing: {} - {}", code, reason);
+                            connected = false;
+                        }
+
+                        @Override
+                        public void onClosed(WebSocket webSocket, int code, String reason) {
+                            logger.info("Reconnection closed: {} - {}", code, reason);
+                            connected = false;
+                            if (connectLatch != null) {
+                                connectLatch.countDown();
+                            }
+                        }
+
+                        @Override
+                        public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                            logger.error("Reconnection failure: {}", t.getMessage());
+                            connected = false;
+                            if (connectLatch != null) {
+                                connectLatch.countDown();
+                            }
+                        }
+                    });
+                    
+                    try {
+                        connectLatch.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    
+                    if (connected) {
+                        logger.info("Reconnection successful!");
+                        currentReconnectAttempt = 0;
+                        
+                        for (WsEventListener listener : eventListeners) {
+                            try {
+                                listener.onReconnected();
+                            } catch (Exception e) {
+                                logger.error("Reconnect listener error: {}", e.getMessage());
+                            }
+                        }
+                        break;
+                    }
+                    
+                } catch (Exception e) {
+                    logger.error("Reconnection attempt failed: {}", e.getMessage());
+                }
+            }
+            
+            if (!connected && currentReconnectAttempt >= maxReconnectRetries) {
+                logger.error("Max reconnection attempts reached, giving up");
+                for (WsEventListener listener : eventListeners) {
+                    try {
+                        listener.onReconnectFailed(new IOException("Max reconnection attempts reached"));
+                    } catch (Exception e) {
+                        logger.error("Reconnect failed listener error: {}", e.getMessage());
+                    }
+                }
+            }
+            
+        } finally {
+            reconnecting.set(false);
+        }
     }
 
     private void processRequest(PendingRequest request) {
@@ -564,26 +815,79 @@ public class OpenClawWsClient {
         return sendAndWait("status", null, 10000);
     }
 
+    /**
+     * 同步执行 Agent（使用默认 agentId）
+     * 
+     * @param message 消息内容
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgent(String message) throws IOException {
         return runAgent((String) null, message, null, null, 0);
     }
 
+    /**
+     * 同步执行 Agent
+     * 
+     * @param message  消息内容
+     * @param agentId  Agent ID
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgent(String message, String agentId) throws IOException {
         return runAgent(null, message, agentId, null, 0);
     }
 
+    /**
+     * 同步执行 Agent（完整参数）
+     * 
+     * @param message   消息内容
+     * @param agentId   Agent ID
+     * @param deliver   是否投递响应
+     * @param timeoutMs 超时时间（毫秒），0 使用默认值
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgent(String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
         return runAgent(null, message, agentId, deliver, timeoutMs);
     }
 
+    /**
+     * 同步执行 Agent（带自定义 UID）
+     * 
+     * @param uid      自定义 UID，用于追踪请求
+     * @param message  消息内容
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgentWithUid(String uid, String message) throws IOException {
         return runAgent(uid, message, null, null, 0);
     }
 
+    /**
+     * 同步执行 Agent（带自定义 UID）
+     * 
+     * @param uid      自定义 UID
+     * @param message  消息内容
+     * @param agentId  Agent ID
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgentWithUid(String uid, String message, String agentId) throws IOException {
         return runAgent(uid, message, agentId, null, 0);
     }
 
+    /**
+     * 同步执行 Agent（带自定义 UID 和完整参数）
+     * 
+     * @param uid       自定义 UID
+     * @param message   消息内容
+     * @param agentId   Agent ID
+     * @param deliver   是否投递响应
+     * @param timeoutMs 超时时间（毫秒）
+     * @return Agent 执行结果
+     * @throws IOException 执行失败时抛出
+     */
     public AgentResult runAgentWithUid(String uid, String message, String agentId, Boolean deliver, long timeoutMs) throws IOException {
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultResultTimeoutMs;
         try {
@@ -618,18 +922,50 @@ public class OpenClawWsClient {
         }
     }
 
+    /**
+     * 异步执行 Agent（使用默认 agentId）
+     * 
+     * @param message 消息内容
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
     public CompletableFuture<AgentResult> runAgentAsync(String message) {
         return runAgentAsync(null, message, null, null, null, null);
     }
 
+    /**
+     * 异步执行 Agent
+     * 
+     * @param message  消息内容
+     * @param agentId  Agent ID
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
     public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId) {
         return runAgentAsync(null, message, agentId, null, null, null);
     }
 
+    /**
+     * 异步执行 Agent
+     * 
+     * @param message  消息内容
+     * @param agentId  Agent ID
+     * @param deliver  是否投递响应
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
     public CompletableFuture<AgentResult> runAgentAsync(String message, String agentId, Boolean deliver) {
         return runAgentAsync(null, message, agentId, deliver, null, null);
     }
 
+    /**
+     * 异步执行 Agent（完整参数）
+     * 
+     * @param uid                自定义 UID
+     * @param message            消息内容
+     * @param agentId           Agent ID
+     * @param deliver            是否投递响应
+     * @param requestTimeoutMs   请求超时（毫秒）
+     * @param resultTimeoutMs    结果超时（毫秒）
+     * @return CompletableFuture，包含 Agent 执行结果
+     */
     public CompletableFuture<AgentResult> runAgentAsync(String uid, String message, String agentId, 
             Boolean deliver, Long requestTimeoutMs, Long resultTimeoutMs) {
         
@@ -666,37 +1002,116 @@ public class OpenClawWsClient {
         
         return future;
     }
-
+    
+    /**
+     * 获取当前队列大小
+     * 
+     * @return 当前等待处理的请求数量
+     */
     public int getQueueSize() {
         return requestQueue.size();
     }
 
+    /**
+     * 检查队列是否已满
+     * 
+     * @return 队列是否已满
+     */
     public boolean isQueueFull() {
         return requestQueue.size() >= maxQueueCapacity;
     }
 
+    /**
+     * 获取队列最大容量
+     * 
+     * @return 队列最大容量
+     */
     public int getMaxQueueCapacity() {
         return maxQueueCapacity;
     }
 
+    /**
+     * 检查是否启用自动重连
+     * 
+     * @return 是否启用自动重连
+     */
+    public boolean isAutoReconnect() {
+        return autoReconnect;
+    }
+
+    /**
+     * 获取当前重连尝试次数
+     * 
+     * @return 当前重连尝试次数
+     */
+    public int getCurrentReconnectAttempt() {
+        return currentReconnectAttempt;
+    }
+
+    /**
+     * 获取最大重连次数
+     * 
+     * @return 最大重连次数
+     */
+    public int getMaxReconnectRetries() {
+        return maxReconnectRetries;
+    }
+
+    /**
+     * 检查是否正在重连
+     * 
+     * @return 是否正在重连
+     */
+    public boolean isReconnecting() {
+        return reconnecting.get();
+    }
+
+    /**
+     * 发送消息到指定目标
+     * 
+     * @param target  目标标识
+     * @param message 消息内容
+     * @return 响应结果
+     * @throws IOException 发送失败时抛出
+     */
     public WsResponse sendMessage(String target, String message) throws IOException {
         Map<String, Object> params = Map.of("target", target, "message", message);
         return sendAndWait("send", params, 30000);
     }
 
+    /**
+     * 发送系统事件
+     * 
+     * @param text 事件内容
+     * @return 响应结果
+     * @throws IOException 发送失败时抛出
+     */
     public WsResponse systemEvent(String text) throws IOException {
         Map<String, Object> params = Map.of("text", text);
         return sendAndWait("system-event", params, 10000);
     }
 
+    /**
+     * 添加事件监听器
+     * 
+     * @param listener 事件监听器
+     */
     public void addEventListener(WsEventListener listener) {
         eventListeners.add(listener);
     }
 
+    /**
+     * 移除事件监听器
+     * 
+     * @param listener 事件监听器
+     */
     public void removeEventListener(WsEventListener listener) {
         eventListeners.remove(listener);
     }
 
+    /**
+     * 关闭客户端连接
+     */
     public void close() {
         running.set(false);
         
@@ -725,18 +1140,38 @@ public class OpenClawWsClient {
         logger.info("WebSocket client closed");
     }
 
+    /**
+     * 检查是否已连接
+     * 
+     * @return 是否已连接
+     */
     public boolean isConnected() {
         return connected;
     }
 
+    /**
+     * 设置是否需要设备认证
+     * 
+     * @param requireDevice 是否需要设备认证
+     */
     public void setRequireDevice(boolean requireDevice) {
         this.requireDevice = requireDevice;
     }
 
+    /**
+     * 获取协议版本
+     * 
+     * @return 协议版本号
+     */
     public int getProtocolVersion() {
         return protocolVersion;
     }
 
+    /**
+     * 获取设备令牌
+     * 
+     * @return 设备令牌
+     */
     public String getDeviceToken() {
         return deviceToken;
     }
