@@ -36,7 +36,7 @@ Java 客户端，用于连接 OpenClaw 自动化平台。
 
 ```xml
 <dependency>
-    <groupId>ai.openclaw</groupId>
+    <groupId>cn.welsione</groupId>
     <artifactId>openclaw-java-client</artifactId>
     <version>1.0.2</version>
 </dependency>

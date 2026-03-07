@@ -1,0 +1,76 @@
+openclaw:
+  base-url: http://127.0.0.1:18789
+  token: your-secret-token
+  hooks-path: /hooks
+  default-timeout-seconds: 120
+  default-wake-mode: now
+  connect-timeout-ms: 10000
+  read-timeout-ms: 30000
+
+  multi-instances:
+    enabled: true
+    default-instance: local
+    instances:
+      local:
+        base-url: http://127.0.0.1:18789
+        token: local-token
+        enabled: true
+        hooks:
+          enabled: true
+          token: gmail_hook_2026
+      production:
+        base-url: https://openclaw.example.com
+        token: prod-token
+        enabled: true
+      staging:
+        base-url: https://staging.openclaw.example.com
+        token: staging-token
+        enabled: false
+  
+  hooks:
+    enabled: true
+    token: webhook-shared-secret
+    path: /hooks
+    presets:
+      - gmail
+    transforms-dir: ./transforms
+    mappings:
+      github:
+        action: agent
+        name: GitHub
+        message: "Process GitHub webhook event"
+        wakeMode: now
+        deliver: true
+        channel: discord
+      slack-event:
+        action: agent
+        name: SlackBot
+        wakeMode: next-heartbeat
+        deliver: true
+        channel: slack
+      custom-webhook:
+        action: wake
+        wakeMode: now
+  
+  scheduled-tasks:
+    daily-summary:
+      cron: "0 0 9 * * ?"
+      message: "Give me a summary of my day"
+      agent-name: DailySummary
+      enabled: true
+      wake-mode: now
+    
+    check-emails:
+      cron: "0 */30 * * * ?"
+      message: "Check for new emails"
+      agent-name: EmailChecker
+      enabled: false
+      wake-mode: next-heartbeat
+    
+    weekly-report:
+      cron: "0 0 10 ? * MON"
+      message: "Generate weekly report"
+      agent-name: ReportGenerator
+      model: openai/gpt-5.2-mini
+      timeout-seconds: 300
+      enabled: true

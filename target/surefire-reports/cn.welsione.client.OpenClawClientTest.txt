@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: cn.welsione.client.OpenClawClientTest
+-------------------------------------------------------------------------------
+Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.230 s -- in cn.welsione.client.OpenClawClientTest
